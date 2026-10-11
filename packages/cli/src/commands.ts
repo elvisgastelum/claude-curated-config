@@ -6,6 +6,7 @@ import {
   type Conflict,
   doctor,
   loadCatalog,
+  neededValues,
   type Plan,
   plan,
   resolveClaudeDir,
@@ -126,7 +127,12 @@ export async function planCommand(ctx: Context, flags: PlanFlags): Promise<numbe
     ...parseConflictFlags(flags),
     secrets: secrets.values,
   });
-  if (ctx.options.json) writeJson(planDoc(result, selection, secrets.required));
+  const needed = new Set(neededValues(result));
+  const states = secrets.required.map((secret) => ({
+    ...secret,
+    needed: needed.has(secret.name),
+  }));
+  if (ctx.options.json) writeJson(planDoc(result, selection, states));
   else print(`Claude dir: ${ctx.claudeDir}\n\n${renderPlan(result, ctx.colors)}`);
   return EXIT.ok;
 }
@@ -156,11 +162,8 @@ export async function preparePlan(
   options: PreparePlanOptions,
 ): Promise<Plan | null> {
   const catalog = ctx.catalog();
-  const secrets = options.dryRun
-    ? secretStatus(catalog, selection).values
-    : await collectSecrets(ctx, catalog, selection, { prompt: options.prompt });
-  if (!secrets) return null;
   const resolutions = { ...conflictOptions.resolutions };
+  let secrets = secretStatus(catalog, selection).values;
   const planFor = () =>
     plan({
       catalog,
@@ -170,7 +173,19 @@ export async function preparePlan(
       resolutions,
       secrets,
     });
-  const planned = planFor();
+  let planned = planFor();
+  // Only steps that will run need values (a step whose check passes needs none). A dry run
+  // plans without them: steps that need one are marked.
+  const needed = neededValues(planned);
+  if (!options.dryRun && needed.length > 0) {
+    const collected = await collectSecrets(ctx, catalog, selection, {
+      prompt: options.prompt,
+      needed,
+    });
+    if (!collected) return null;
+    secrets = collected;
+    planned = planFor();
+  }
   const open = unresolvedConflicts(planned);
   if (open.length === 0) return planned;
   if (!options.prompt) throw conflictsError(planned);

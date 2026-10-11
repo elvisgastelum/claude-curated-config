@@ -355,19 +355,23 @@ export function secretStatus(catalog: Catalog, selection: Selection) {
 }
 
 /**
- * Collects the secret and input values a selection needs from the environment. In
- * interactive mode, missing ones are asked (secrets masked, inputs as plain text); otherwise
- * exit 2: `secrets_missing` when a secret is missing, else `inputs_missing`. Returns null
- * when the user cancels a prompt.
+ * Collects the secret and input values a selection needs from the environment. Only names in
+ * `needed` (when given) are required: values of steps that will not run (their check passes)
+ * are never asked for. In interactive mode, missing ones are asked (secrets masked, inputs as
+ * plain text); otherwise exit 2: `secrets_missing` when a secret is missing, else
+ * `inputs_missing`. Returns null when the user cancels a prompt.
  */
 export async function collectSecrets(
   ctx: Context,
   catalog: Catalog,
   selection: Selection,
-  options: { prompt: boolean } = { prompt: ctx.interactive },
+  options: { prompt: boolean; needed?: readonly string[] } = { prompt: ctx.interactive },
 ): Promise<Record<string, string> | null> {
   const { values, required } = secretStatus(catalog, selection);
-  const missing = required.filter((secret) => !secret.provided);
+  const needed = options.needed ? new Set(options.needed) : null;
+  const missing = required.filter(
+    (secret) => !secret.provided && (needed === null || needed.has(secret.name)),
+  );
   if (missing.length === 0) return values;
   if (!options.prompt) {
     const brief = ({ name, description, module }: (typeof missing)[number]) => ({

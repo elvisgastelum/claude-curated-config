@@ -163,6 +163,8 @@ export interface PlannedStep {
   blocked?: boolean;
   /** Set when the step is blocked only because this secret has no value. */
   needsSecret?: string;
+  /** Every secret or input the blocked step references without a value. */
+  needsValues?: string[];
   step: Step;
 }
 
@@ -262,7 +264,7 @@ export interface ModuleStatus {
   skipped: number;
   /** json-merge steps whose only differences are undecided conflicts. */
   conflicts: number;
-  /** Declared secrets without a value. */
+  /** Secrets and inputs without a value that pending steps need. */
   missingSecrets: string[];
 }
 

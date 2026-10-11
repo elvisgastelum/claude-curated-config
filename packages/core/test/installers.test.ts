@@ -9,8 +9,10 @@ import {
   doctor,
   findManagedBlocks,
   loadCatalog,
+  neededValues,
   plan,
   requiredSecrets,
+  status,
   stripManagedBlocks,
   writeCapture,
 } from "../src/index";
@@ -659,6 +661,88 @@ describe("module inputs", () => {
       env: { ...env, SERVICE_URL: "https://elsewhere.test" },
     });
     expect(ignored.modules[0]?.steps[0]?.needsSecret).toBe("SERVICE_URL");
+  });
+
+  it("needs no input for a step whose check passes, only for steps that will run", () => {
+    const claudeDir = tempDir();
+    const log = join(tempDir(), "log");
+    const catalog = loadCatalog(
+      writeCatalog([
+        {
+          ...inputModule(log),
+          steps: [
+            {
+              ...inputModule(log).steps[0],
+              checkShell: 'test -f "$CCC_CLAUDE_DIR/installed"',
+            },
+          ],
+        },
+      ]),
+    );
+    const env = { PATH: "/usr/bin:/bin" };
+    const pending = plan({ catalog, claudeDir, modules: ["kaneo"], env });
+    expect(pending.modules[0]?.steps[0]).toMatchObject({
+      blocked: true,
+      needsSecret: "SERVICE_URL",
+      needsValues: ["SERVICE_URL"],
+    });
+    expect(neededValues(pending)).toEqual(["SERVICE_URL"]);
+    expect(status({ catalog, claudeDir, env }).modules[0]).toMatchObject({
+      state: "needs-secrets",
+      missingSecrets: ["SERVICE_URL"],
+    });
+
+    writeFileSync(join(claudeDir, "installed"), "");
+    const satisfied = plan({ catalog, claudeDir, modules: ["kaneo"], env });
+    const step = satisfied.modules[0]?.steps[0];
+    expect(step).toMatchObject({ action: "unchanged", reason: "check passed" });
+    expect(step?.blocked).toBeUndefined();
+    expect(step?.needsSecret).toBeUndefined();
+    expect(neededValues(satisfied)).toEqual([]);
+    const result = apply(satisfied, { env });
+    expect(result.ok).toBe(true);
+    expect(result.modules[0]?.steps[0]?.status).toBe("unchanged");
+    expect(status({ catalog, claudeDir, env }).modules[0]).toMatchObject({
+      state: "applied",
+      missingSecrets: [],
+    });
+  });
+
+  it("blocks a step whose check references a missing input", () => {
+    const catalog = loadCatalog(
+      writeCatalog([
+        {
+          id: "env-check",
+          inputs: [{ name: "SERVICE_URL", description: "url" }],
+          steps: [
+            {
+              type: "command",
+              shell: "true",
+              env: { SERVICE_URL: `\${SERVICE_URL}` },
+              checkShell: 'test -n "$SERVICE_URL"',
+            },
+          ],
+        },
+        {
+          id: "placeholder-check",
+          inputs: [{ name: "CCC_INPUT_HOST", description: "host" }],
+          steps: [{ type: "command", shell: "true", checkShell: `test -n "\${CCC_INPUT_HOST}"` }],
+        },
+      ]),
+    );
+    // A same-named caller variable must not satisfy the check either.
+    const env = { PATH: "/usr/bin:/bin", SERVICE_URL: "https://elsewhere.test" };
+    const planned = plan({
+      catalog,
+      claudeDir: tempDir(),
+      modules: ["env-check", "placeholder-check"],
+      env,
+    });
+    expect(planned.modules.map((m) => m.steps[0])).toMatchObject([
+      { action: "skip", blocked: true, needsSecret: "SERVICE_URL" },
+      { action: "skip", blocked: true, needsSecret: "CCC_INPUT_HOST" },
+    ]);
+    expect(neededValues(planned)).toEqual(["SERVICE_URL", "CCC_INPUT_HOST"]);
   });
 
   it("substitutes CCC_INPUT_* placeholders like secrets", () => {

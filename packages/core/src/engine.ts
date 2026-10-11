@@ -53,6 +53,8 @@ interface Evaluation {
   blocked?: boolean;
   /** Set when the step is blocked only because this secret has no value. */
   needsSecret?: string;
+  /** Every secret or input the blocked step references without a value. */
+  needsValues?: string[];
   /** json-merge: every difference from the current file is an undecided conflict. */
   onlyConflicts?: boolean;
   destPath?: string;
@@ -146,6 +148,72 @@ function commandEnv(
     CCC_CLAUDE_JSON: claudeJsonFor(ctx.claudeDir, homeOf(ctx.env)),
     ...extra,
   };
+}
+
+/** True when a shell script or argv text reads the environment variable `name`. */
+function readsVariable(text: string, name: string): boolean {
+  return new RegExp(`\\$\\{?${name}(?![A-Za-z0-9_])`).test(text);
+}
+
+/**
+ * The environment a step's check runs with. Checks decide whether a step runs at all, so a
+ * missing secret or input must not block them: `env` entries without a value are left out
+ * (and so is a same-named caller variable). A check that reads such a variable throws
+ * {@link MissingSecretError} (the step is blocked).
+ */
+function checkEnv(
+  step: Extract<Step, { type: "command" }>,
+  mod: CatalogModule,
+  ctx: EvalContext,
+  checkText: string,
+): NodeJS.ProcessEnv {
+  const declared = declaredNames(mod);
+  const base: NodeJS.ProcessEnv = {
+    ...ctx.env,
+    CCC_CLAUDE_DIR: ctx.claudeDir,
+    CCC_CLAUDE_JSON: claudeJsonFor(ctx.claudeDir, homeOf(ctx.env)),
+  };
+  for (const [key, value] of Object.entries(step.env ?? {})) {
+    try {
+      base[key] = expandValue(value, ctx, declared);
+    } catch (error) {
+      if (!(error instanceof MissingSecretError)) throw error;
+      if (readsVariable(checkText, key)) throw error;
+      delete base[key];
+    }
+  }
+  return base;
+}
+
+/** Placeholders and declared `${NAME}` inputs a step references (in order, deduplicated). */
+function referencedValues(step: Step, mod: CatalogModule): string[] {
+  const names = new Set<string>();
+  const scan = (text: string, declared?: Set<string>) => {
+    for (const match of text.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) {
+      const name = match[1] as string;
+      if (/^CCC_(SECRET|INPUT)_/.test(name) || declared?.has(name)) names.add(name);
+    }
+  };
+  if (step.type === "command") {
+    const declared = declaredNames(mod);
+    for (const text of [
+      step.checkShell ?? "",
+      ...(step.check ?? []),
+      step.shell ?? "",
+      ...(step.run ?? []),
+    ]) {
+      scan(text);
+    }
+    for (const value of Object.values(step.env ?? {})) scan(value, declared);
+  } else {
+    try {
+      const content = readFileSync(resolveInside(mod.dir, step.src, "src"));
+      if (!content.includes(0)) scan(content.toString("utf8"));
+    } catch {
+      // Unreadable sources are reported by the evaluation itself.
+    }
+  }
+  return [...names];
 }
 
 /** The argv shown in plans for a command step (`shell` steps as `bash -c <script>`). */
@@ -370,20 +438,29 @@ function evaluateCommand(
   if (missingBin) {
     return { action: "skip", reason: `"${missingBin}" not found on PATH`, summary };
   }
+  // The check runs first: a step it reports as done needs none of its secrets or inputs.
+  const checkArgv = step.checkShell
+    ? bashArgv(substitute(step.checkShell, secrets))
+    : step.check?.map((arg) => substitute(arg, secrets));
+  if (checkArgv) {
+    const checkText = step.checkShell ?? (step.check ?? []).join(" ");
+    const check = runArgv(checkArgv, checkEnv(step, mod, ctx, checkText), {
+      timeoutMs: CHECK_TIMEOUT_MS,
+    });
+    if (check.code === 0) return { action: "unchanged", reason: "check passed", summary };
+  }
   const runEnv = commandEnv(step, mod, ctx);
   const argv =
     step.shell !== undefined
       ? bashArgv(substitute(step.shell, secrets))
       : (step.run ?? []).map((arg) => substitute(arg, secrets));
-  const checkArgv = step.checkShell
-    ? bashArgv(substitute(step.checkShell, secrets))
-    : step.check?.map((arg) => substitute(arg, secrets));
-  if (checkArgv) {
-    const check = runArgv(checkArgv, runEnv, { timeoutMs: CHECK_TIMEOUT_MS });
-    if (check.code === 0) return { action: "unchanged", reason: "check passed", summary };
-    return { action: "run", reason: "check failed", summary, argv, commandEnv: runEnv };
-  }
-  return { action: "run", reason: "no check defined", summary, argv, commandEnv: runEnv };
+  return {
+    action: "run",
+    reason: checkArgv ? "check failed" : "no check defined",
+    summary,
+    argv,
+    commandEnv: runEnv,
+  };
 }
 
 function evaluate(step: Step, mod: CatalogModule, ctx: EvalContext): Evaluation {
@@ -399,12 +476,14 @@ function evaluate(step: Step, mod: CatalogModule, ctx: EvalContext): Evaluation 
   } catch (error) {
     // One unreadable file or missing secret must not abort the whole plan: the step is blocked.
     if (error instanceof MissingSecretError) {
+      const missing = referencedValues(step, mod).filter((name) => ctx.secrets[name] === undefined);
       return {
         action: "skip",
         reason: error.message,
         summary: `needs ${error.kind} ${error.secret}`,
         blocked: true,
         needsSecret: error.secret,
+        needsValues: [...new Set([error.secret, ...missing])],
       };
     }
     return {
@@ -450,6 +529,7 @@ function planModule(
       else planned.dest = step.dest;
       if (evaluation.blocked) planned.blocked = true;
       if (evaluation.needsSecret) planned.needsSecret = evaluation.needsSecret;
+      if (evaluation.needsValues) planned.needsValues = evaluation.needsValues;
       return planned;
     }),
   };
@@ -514,6 +594,19 @@ export function requiredSecrets(
       .filter((value) => !seen.has(value.name) && seen.add(value.name))
       .map(({ name, description, secret }) => ({ name, description, module: mod.id, secret })),
   );
+}
+
+/**
+ * Secrets and inputs the plan's steps need but have no value, deduplicated in plan order.
+ * Steps whose check passes, or that are skipped for another reason, need none: only these
+ * values have to be asked for before applying.
+ */
+export function neededValues(planned: Plan): string[] {
+  return [
+    ...new Set(
+      planned.modules.flatMap((mod) => mod.steps.flatMap((step) => step.needsValues ?? [])),
+    ),
+  ];
 }
 
 /** Conflicts that still need a decision before the plan can be applied. */
@@ -695,7 +788,8 @@ export interface StatusOptions {
  * Reports, for every catalog module, whether its steps are already satisfied. Decisions and
  * secret values are inputs only; nothing is remembered between runs.
  *
- * - `needs-secrets`: the module declares secrets without values, so it cannot be evaluated.
+ * - `needs-secrets`: a step that is not already satisfied needs a secret or input without a
+ *   value (steps whose check passes need none).
  * - `conflicts`: nothing is pending except undecided json-merge conflicts.
  */
 export function status(options: StatusOptions): StatusReport {
@@ -710,8 +804,8 @@ export function status(options: StatusOptions): StatusReport {
     platform: platformOf(env, options.platform),
   };
   const modules: ModuleStatus[] = options.catalog.modules.map((mod) => {
-    const missingSecrets = [...declaredNames(mod)].filter((name) => secrets[name] === undefined);
     const evaluations = mod.steps.map((step) => evaluate(step, mod, ctx));
+    const missingSecrets = [...new Set(evaluations.flatMap((e) => e.needsValues ?? []))];
     const count = (pred: (e: Evaluation) => boolean) => evaluations.filter(pred).length;
     const satisfied = count((e) => e.action === "unchanged");
     const skipped = count((e) => e.action === "skip" && !e.blocked);

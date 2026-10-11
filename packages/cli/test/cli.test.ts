@@ -512,6 +512,7 @@ describe("ccc --cli", () => {
         module: "svc",
         secret: false,
         provided: false,
+        needed: true,
       },
     ]);
     const missing = ccc([...args, "apply", "-m", "svc", "--yes"]);
@@ -526,6 +527,39 @@ describe("ccc --cli", () => {
     });
     expect(ok.code).toBe(0);
     expect(readFileSync(log, "utf8")).toBe("https://svc.example.test\n");
+  });
+
+  it("asks only for the inputs of steps that will run", () => {
+    const catalog = temp();
+    const claudeDir = join(temp(), "c");
+    mkdirSync(join(catalog, "modules/svc"), { recursive: true });
+    mkdirSync(join(catalog, "profiles"));
+    writeFileSync(
+      join(catalog, "modules/svc/module.json"),
+      JSON.stringify({
+        id: "svc",
+        name: "Service",
+        description: "Registers a service by URL.",
+        inputs: [{ name: "SVC_URL", description: "Base URL of your service" }],
+        steps: [
+          {
+            type: "command",
+            shell: 'touch "$CCC_CLAUDE_DIR/registered"',
+            env: { SVC_URL: `\${SVC_URL}` },
+            checkShell: 'test -f "$CCC_CLAUDE_DIR/registered"',
+          },
+        ],
+      }),
+    );
+    const args = ["--cli", "--catalog", catalog, "--claude-dir", claudeDir, "--json"];
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(join(claudeDir, "registered"), "");
+
+    const planned = ccc([...args, "plan", "-m", "svc"]).json();
+    expect(planned.secrets).toMatchObject([{ name: "SVC_URL", provided: false, needed: false }]);
+    const result = ccc([...args, "apply", "-m", "svc", "--yes"]);
+    expect(result.code).toBe(0);
+    expect(result.json().ok).toBe(true);
   });
 
   it("flags private infrastructure in capture output using CCC_PRIVATE_DOMAINS", () => {
@@ -679,7 +713,9 @@ describe("personal profile with fake installers", () => {
     expect(context7?.steps[0]?.status).toBe("skipped");
 
     const before = calls.length;
-    const second = ccc(args, env);
+    // Re-applying needs no KANEO_URL: the kaneo step's check passes, so it will not run.
+    const { KANEO_URL: _kaneo, ...withoutKaneo } = env;
+    const second = ccc(args, withoutKaneo);
     expect(second.code).toBe(0);
     const done = (
       second.json().modules as { id: string; steps: { status: string; message: string }[] }[]

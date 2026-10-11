@@ -95,6 +95,8 @@ export interface SecretState {
   /** False for a non-secret module input. */
   secret: boolean;
   provided: boolean;
+  /** A step that will run needs it (false when every step using it is already satisfied). */
+  needed: boolean;
 }
 
 export function planDoc(plan: Plan, selection: Selection, secrets: SecretState[] = []) {
