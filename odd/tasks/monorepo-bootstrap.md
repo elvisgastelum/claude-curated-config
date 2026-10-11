@@ -43,6 +43,7 @@ Strategy: `single-pr` (user decision 2026-10-11). Create public repo elvisgastel
 | T7 | Explicit profile order (`order` field; minimal first) | delegated | [x] | f0a63fe |
 | T8 | json-merge conflict detection: TUI asks per conflict; `--cli` fails exit 2 listing conflicts unless `--on-conflict catalog\|keep` or `--resolve <module>:<json.path>=catalog\|keep` | delegated | [x] | e8a257a |
 | T9 | `ccc capture`: import current ~/.claude into catalog modules + `personal` profile; secrets redacted to `${VAR}` placeholders filled at apply (TUI prompt / env in agent mode) | delegated | [x] | 5de5a65 |
+| T10 | Review 2 fixes on PR #1: broader secret detection (`*_KEY`, `DATABASE_URL`, hex, URL credentials, MCP argv), status honors secrets/keep, bounded+tolerant capture walk, Node >= 20.12 floor, capture requires `--out` when running from the installer checkout, small R2 cleanups | delegated | [ ] | |
 
 Route evidence: empty repo, 5 tasks across many non-trivial files → one bounded writer (mandatory writer trigger).
 
@@ -86,4 +87,4 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 - Pre-push history scan: no real credentials (only regex sources, docs and fake fixtures).
 
 ## Next step
-Create public repo elvisgastelum/claude-curated-config, push `main` + branch, open the single PR. Then fix the review 2 follow-ups before capturing the real config.
+PR #1 open (https://github.com/elvisgastelum/claude-curated-config/pull/1). User decisions 2026-10-11: fix review 2 gaps on PR #1 (T10); do NOT remember keep decisions between runs; installed `ccc capture` requires `--out`; then run `ccc capture --dry-run` on the real ~/.claude and show items + redactions before writing anything.
