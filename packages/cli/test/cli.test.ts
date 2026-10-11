@@ -596,6 +596,47 @@ describe("ccc --cli", () => {
     expect(files).toContain("CCC_INPUT_");
   });
 
+  it("reads capture.config.json from --out, else from the catalog in use", () => {
+    const home = temp();
+    const claudeDir = join(home, ".claude");
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(
+      join(claudeDir, "settings.json"),
+      JSON.stringify({
+        skipDangerousModePermissionPrompt: true,
+        model: "opus",
+        autoMode: {
+          environment: [
+            "Repo: /Users/someone/Projects/app",
+            "Repo: https://github.com/someone/app",
+          ],
+        },
+      }),
+    );
+    const out = join(temp(), "catalog");
+    mkdirSync(out);
+    const base = ["--cli", "capture", "--json", "--include", "settings", "--claude-dir", claudeDir];
+    const settingsOf = (doc: Record<string, unknown>) =>
+      (doc.skipped as { path: string; reason: string }[]).map((s) => `${s.path}: ${s.reason}`);
+
+    // No config in --out: the bundled catalog's config applies.
+    const bundled = ccc([...base, "--out", out, "--dry-run"], { HOME: home });
+    expect(bundled.code).toBe(0);
+    expect(settingsOf(bundled.json())).toEqual([
+      "settings.json /skipDangerousModePermissionPrompt: ignored by capture config",
+    ]);
+
+    writeFileSync(join(out, "capture.config.json"), JSON.stringify({ ignoreSettings: ["/model"] }));
+    const own = ccc([...base, "--out", out, "--dry-run"], { HOME: home });
+    expect(own.code).toBe(0);
+    expect(settingsOf(own.json())).toEqual(["settings.json /model: ignored by capture config"]);
+
+    writeFileSync(join(out, "capture.config.json"), JSON.stringify({ ignoreSettings: "/model" }));
+    const invalid = ccc([...base, "--out", out, "--dry-run"], { HOME: home });
+    expect(invalid.code).toBe(3);
+    expect((invalid.json().error as { code: string }).code).toBe("invalid_capture_config");
+  });
+
   it("rejects an unknown capture kind with exit 2", () => {
     const run = ccc(["--cli", "capture", "--include", "nope", "--dry-run", "--json"]);
     expect(run.code).toBe(2);

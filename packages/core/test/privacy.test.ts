@@ -63,9 +63,14 @@ describe("findPrivate", () => {
     expect(spans("svc.example-private.com", [])).toEqual([]);
   });
 
-  it("reads CCC_PRIVATE_DOMAINS (comma-separated) with a default", () => {
-    expect(privateDomainsFromEnv({})).toEqual(DEFAULT_PRIVATE_DOMAINS);
-    expect(DEFAULT_PRIVATE_DOMAINS).toEqual(["elvisgastelum.com"]);
+  it("reads CCC_PRIVATE_DOMAINS (comma-separated) over the capture config domains", () => {
+    // The built-in default is empty: private domains come from capture.config.json.
+    expect(DEFAULT_PRIVATE_DOMAINS).toEqual([]);
+    expect(privateDomainsFromEnv({})).toEqual([]);
+    expect(privateDomainsFromEnv({}, ["config.example.com"])).toEqual(["config.example.com"]);
+    expect(
+      privateDomainsFromEnv({ CCC_PRIVATE_DOMAINS: "env.example.com" }, ["config.example.com"]),
+    ).toEqual(["env.example.com"]);
     expect(
       privateDomainsFromEnv({ CCC_PRIVATE_DOMAINS: " A.example.com, b.example.org ,," }),
     ).toEqual(["a.example.com", "b.example.org"]);

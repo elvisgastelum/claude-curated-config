@@ -9,13 +9,18 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { CatalogError } from "../src/errors";
 import {
   apply,
   CAPTURE_IGNORE_SETTINGS_ITEMS,
   captureClaudeConfig,
+  captureConfigOptions,
+  DEFAULT_CAPTURE_CONFIG,
   findSecrets,
+  loadCaptureConfig,
   loadCatalog,
   plan,
   requiredSecrets,
@@ -425,14 +430,25 @@ describe("ignored settings items", () => {
   const settingsOf = (result: ReturnType<typeof captureClaudeConfig>) =>
     JSON.parse(result.items[0]?.files[0]?.content.toString("utf8") ?? "{}");
 
-  it("drops homelab permission items by default and reports them as skipped", () => {
-    expect(CAPTURE_IGNORE_SETTINGS_ITEMS.map((entry) => entry.reason)).toContain("homelab");
-    const result = capture();
+  it("has no built-in patterns: they come from the capture config", () => {
+    expect(CAPTURE_IGNORE_SETTINGS_ITEMS).toEqual([]);
+    expect(settingsOf(capture()).permissions.allow).toContain("Bash(homelabctl:*)");
+    const config = captureConfigOptions({
+      ...DEFAULT_CAPTURE_CONFIG,
+      ignoreSettingsItems: ["homelabctl"],
+    });
+    const result = capture([...(config.ignoreSettingsItems ?? [])]);
     expect(settingsOf(result)).toEqual({ permissions: { allow: ["Bash(ls:*)"] } });
     expect(result.skipped).toEqual(
       expect.arrayContaining([
-        { path: "settings.json /permissions/allow Bash(homelabctl:*)", reason: "homelab" },
-        { path: "settings.json /permissions/ask Bash(homelabctl deploy:*)", reason: "homelab" },
+        {
+          path: "settings.json /permissions/allow Bash(homelabctl:*)",
+          reason: "ignored by capture config",
+        },
+        {
+          path: "settings.json /permissions/ask Bash(homelabctl deploy:*)",
+          reason: "ignored by capture config",
+        },
       ]),
     );
   });
@@ -463,5 +479,103 @@ describe("dry-run without secret values", () => {
     expect(dry.modules[0]?.steps[0]?.message).toMatch(/^needs secret CCC_SECRET_SETTINGS_/);
     const real = apply(p, { env: NO_BINS });
     expect(real.ok).toBe(false);
+  });
+});
+
+const CATALOG_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../catalog");
+
+describe("capture config", () => {
+  const write = (doc: unknown) => {
+    const dir = tempDir();
+    writeFileSync(
+      join(dir, "capture.config.json"),
+      typeof doc === "string" ? doc : JSON.stringify(doc),
+    );
+    return dir;
+  };
+
+  it("ships the catalog capture config", () => {
+    expect(loadCaptureConfig(CATALOG_DIR)).toEqual({
+      ignoreSettings: ["/skipDangerousModePermissionPrompt"],
+      ignoreSettingsItems: ["homelabctl"],
+      privateDomains: ["elvisgastelum.com"],
+    });
+  });
+
+  it("is optional and fills missing fields with the empty defaults", () => {
+    expect(loadCaptureConfig(tempDir())).toBeNull();
+    expect(loadCaptureConfig(write({ privateDomains: ["Example.TEST"] }))).toEqual({
+      ...DEFAULT_CAPTURE_CONFIG,
+      privateDomains: ["example.test"],
+    });
+  });
+
+  it("refuses an invalid config", () => {
+    for (const doc of [
+      "{ broken",
+      [],
+      { ignoreSettings: "/x" },
+      { ignoreSettings: ["no-slash"] },
+      { ignoreSettingsItems: ["(unclosed"] },
+      { privateDomains: [1] },
+      { unknownKey: [] },
+    ]) {
+      const dir = write(doc);
+      expect(() => loadCaptureConfig(dir), JSON.stringify(doc)).toThrow(CatalogError);
+      try {
+        loadCaptureConfig(dir);
+      } catch (error) {
+        expect((error as CatalogError).code).toBe("invalid_capture_config");
+      }
+    }
+  });
+
+  it("maps the config to capture options; CCC_PRIVATE_DOMAINS overrides its domains", () => {
+    const config = {
+      ignoreSettings: ["/a"],
+      ignoreSettingsItems: ["homelabctl"],
+      privateDomains: ["config.example.test"],
+    };
+    const options = captureConfigOptions(config, {});
+    expect(options.ignoreSettings).toEqual(["/a"]);
+    expect(options.privateDomains).toEqual(["config.example.test"]);
+    expect(options.ignoreSettingsItems?.map((i) => [i.match.source, i.reason])).toEqual([
+      ["homelabctl", "ignored by capture config"],
+    ]);
+    expect(
+      captureConfigOptions(config, { CCC_PRIVATE_DOMAINS: "env.example.test" }).privateDomains,
+    ).toEqual(["env.example.test"]);
+  });
+});
+
+describe("settings left out of a capture", () => {
+  const capture = (
+    settings: unknown,
+    options: Partial<Parameters<typeof captureClaudeConfig>[0]> = {},
+  ) => {
+    const claudeDir = tempDir();
+    writeFileSync(join(claudeDir, "settings.json"), JSON.stringify(settings));
+    const result = captureClaudeConfig({
+      claudeDir,
+      claudeJson: join(claudeDir, "none.json"),
+      include: ["settings"],
+      ...options,
+    });
+    const content = result.items[0]?.files[0]?.content.toString("utf8");
+    return { result, settings: content ? JSON.parse(content) : undefined };
+  };
+
+  it("drops ignored JSON pointers", () => {
+    const { result, settings } = capture(
+      { skipDangerousModePermissionPrompt: true, model: "opus" },
+      { ignoreSettings: ["/skipDangerousModePermissionPrompt", "/not/there"] },
+    );
+    expect(settings).toEqual({ model: "opus" });
+    expect(result.skipped).toEqual([
+      {
+        path: "settings.json /skipDangerousModePermissionPrompt",
+        reason: "ignored by capture config",
+      },
+    ]);
   });
 });

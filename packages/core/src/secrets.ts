@@ -110,16 +110,22 @@ export function findSecrets(text: string): Span[] {
   return spans.sort((a, b) => a.start - b.start);
 }
 
-/** Domains whose host names capture treats as private infrastructure by default. */
-export const DEFAULT_PRIVATE_DOMAINS: readonly string[] = ["elvisgastelum.com"];
+/**
+ * Built-in private domains: none. A catalog lists its own in `capture.config.json`
+ * (`privateDomains`).
+ */
+export const DEFAULT_PRIVATE_DOMAINS: readonly string[] = [];
 
 /**
  * Private domains from `CCC_PRIVATE_DOMAINS` (comma-separated; empty means none), else
- * {@link DEFAULT_PRIVATE_DOMAINS}.
+ * `fallback` (the capture config's domains, default {@link DEFAULT_PRIVATE_DOMAINS}).
  */
-export function privateDomainsFromEnv(env: NodeJS.ProcessEnv = process.env): string[] {
+export function privateDomainsFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  fallback: readonly string[] = DEFAULT_PRIVATE_DOMAINS,
+): string[] {
   const raw = env.CCC_PRIVATE_DOMAINS;
-  if (raw === undefined) return [...DEFAULT_PRIVATE_DOMAINS];
+  if (raw === undefined) return [...fallback];
   return raw
     .split(",")
     .map((domain) => domain.trim().toLowerCase())

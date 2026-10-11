@@ -15,16 +15,19 @@ import {
 } from "@clack/prompts";
 import {
   CAPTURE_KINDS,
+  type CaptureConfig,
   type CaptureKind,
   type CaptureResult,
   type CaptureWriteResult,
   type Catalog,
   captureClaudeConfig,
+  captureConfigOptions,
   collectProvided,
+  DEFAULT_CAPTURE_CONFIG,
   defaultClaudeJson,
+  loadCaptureConfig,
   loadCatalog,
   type ProvidedIndex,
-  privateDomainsFromEnv,
   type Redaction,
   requiredSecrets,
   type Selection,
@@ -211,18 +214,31 @@ function providedBy(
   return { provided, warnings };
 }
 
+/**
+ * The capture config: `capture.config.json` of the `--out` catalog, else of the catalog in
+ * use, else the built-in defaults. An invalid file throws `invalid_capture_config`.
+ */
+function captureConfigFor(ctx: Context, outDir?: string): CaptureConfig {
+  for (const dir of outDir ? [outDir, ctx.catalogPath] : [ctx.catalogPath]) {
+    const config = loadCaptureConfig(dir);
+    if (config) return config;
+  }
+  return DEFAULT_CAPTURE_CONFIG;
+}
+
 /** Captures with what the catalogs provide; their load problems become capture warnings. */
 function runCapture(
   ctx: Context,
   options: { claudeJson: string; include: CaptureKind[]; outDir?: string },
 ): CaptureResult {
+  const config = captureConfigFor(ctx, options.outDir);
   const { provided, warnings } = providedBy(ctx, options.outDir);
   const capture = captureClaudeConfig({
     claudeDir: ctx.claudeDir,
     claudeJson: options.claudeJson,
     include: options.include,
     provided,
-    privateDomains: privateDomainsFromEnv(process.env),
+    ...captureConfigOptions(config, process.env),
   });
   capture.warnings.unshift(...warnings);
   return capture;

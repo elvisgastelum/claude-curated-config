@@ -15,6 +15,7 @@
     "index.d.ts",
     "modules",
     "profiles",
+    "capture.config.json",
     "README.md"
   ],
   "scripts": {

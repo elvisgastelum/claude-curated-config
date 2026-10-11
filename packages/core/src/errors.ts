@@ -2,6 +2,7 @@ export type CatalogErrorCode =
   | "invalid_catalog"
   | "invalid_module"
   | "invalid_profile"
+  | "invalid_capture_config"
   | "unknown_module"
   | "unknown_profile"
   | "cyclic_requires"

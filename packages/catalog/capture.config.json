@@ -1,0 +1,5 @@
+{
+  "ignoreSettings": ["/skipDangerousModePermissionPrompt"],
+  "ignoreSettingsItems": ["homelabctl"],
+  "privateDomains": ["elvisgastelum.com"]
+}

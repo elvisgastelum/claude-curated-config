@@ -84,6 +84,24 @@ A module that installs things through an external installer declares what it own
 
 Capture also never takes `skills/synced` or `skills/homelab-service-manager` (`CAPTURE_IGNORE` in core). Modules whose id starts with `personal-` never hide anything.
 
+### Capture config
+
+`capture.config.json` at the catalog root (optional) says what else `ccc capture` leaves out. Capture reads it from the `--out` catalog, else from the catalog in use, else uses the built-in defaults (all lists empty). An invalid file stops capture with exit `3` (`invalid_capture_config`) before anything is written.
+
+```json
+{
+  "ignoreSettings": ["/skipDangerousModePermissionPrompt"],
+  "ignoreSettingsItems": ["homelabctl"],
+  "privateDomains": ["elvisgastelum.com"]
+}
+```
+
+| Key | Effect |
+|-----|--------|
+| `ignoreSettings` | JSON pointers removed from the captured `settings.json`, reported as `skipped` with reason `ignored by capture config`. |
+| `ignoreSettingsItems` | Regular expressions (JavaScript syntax, matched anywhere in the item): string items of any settings array outside `hooks` that match are removed and reported as `settings.json <pointer> <item>` with reason `ignored by capture config`. |
+| `privateDomains` | Domains whose host names the privacy scan replaces with `${CCC_INPUT_*}` inputs. `CCC_PRIVATE_DOMAINS` (comma-separated, empty for none) overrides this list. |
+
 Rules:
 
 - `dest` must stay inside the Claude dir (no absolute paths, no `..`); the loader rejects anything else.

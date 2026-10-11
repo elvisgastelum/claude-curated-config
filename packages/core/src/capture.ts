@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, rmSync, statSync } fr
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { findManagedBlocks, stripManagedBlocks } from "./blocks";
+import { CAPTURE_CONFIG_REASON } from "./capture-config";
 import { CatalogError } from "./errors";
 import { writeFileAtomic } from "./fsutil";
 import { pathMatches } from "./glob";
@@ -63,12 +64,10 @@ export interface IgnoredSettingsItem {
 }
 
 /**
- * String items of settings arrays (e.g. `/permissions/allow`) never captured: homelab
- * tooling hints that must not go into a public catalog.
+ * Built-in string items of settings arrays never captured: none. A catalog lists its own
+ * patterns in `capture.config.json` (`ignoreSettingsItems`).
  */
-export const CAPTURE_IGNORE_SETTINGS_ITEMS: readonly IgnoredSettingsItem[] = [
-  { match: /homelabctl/, reason: "homelab" },
-];
+export const CAPTURE_IGNORE_SETTINGS_ITEMS: readonly IgnoredSettingsItem[] = [];
 
 export interface CaptureLimits {
   maxFiles: number;
@@ -147,6 +146,8 @@ export interface CaptureOptions {
   ignore?: readonly string[];
   /** Settings array items never captured (default {@link CAPTURE_IGNORE_SETTINGS_ITEMS}). */
   ignoreSettingsItems?: readonly IgnoredSettingsItem[];
+  /** JSON pointers dropped from the captured settings (reported as ignored by the config). */
+  ignoreSettings?: readonly string[];
   /**
    * Domains whose host names are private infrastructure (default
    * {@link DEFAULT_PRIVATE_DOMAINS}; see `privateDomainsFromEnv` for `CCC_PRIVATE_DOMAINS`).
@@ -468,6 +469,9 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
   if (wanted.has("settings") && isPlainObject(settings)) {
     const report = (path: string, reason: string) => skipped.push({ path, reason });
     const doc = withoutProvided(structuredClone(settings), provided, report);
+    for (const pointer of options.ignoreSettings ?? []) {
+      if (removePointer(doc, pointer)) report(`settings.json ${pointer}`, CAPTURE_CONFIG_REASON);
+    }
     withoutIgnoredItems(doc, options.ignoreSettingsItems ?? CAPTURE_IGNORE_SETTINGS_ITEMS, report);
     add(
       "settings",

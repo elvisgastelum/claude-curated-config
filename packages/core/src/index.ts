@@ -24,6 +24,14 @@ export {
   PERSONAL_PROFILE_ID,
   writeCapture,
 } from "./capture";
+export type { CaptureConfig } from "./capture-config";
+export {
+  CAPTURE_CONFIG_FILE,
+  CAPTURE_CONFIG_REASON,
+  captureConfigOptions,
+  DEFAULT_CAPTURE_CONFIG,
+  loadCaptureConfig,
+} from "./capture-config";
 export { loadCatalog, resolveSelection } from "./catalog";
 export type { DoctorOptions } from "./doctor";
 export { compareVersions, doctor, MIN_NODE_VERSION } from "./doctor";
