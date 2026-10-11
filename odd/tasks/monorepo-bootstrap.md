@@ -34,8 +34,8 @@ Strategy: `ask-on-risk`. Forecast ~1500 authored lines (exceeds 400 → chain st
 ## Tasks
 | ID | Task | Route | Status | Commit |
 |----|------|-------|--------|--------|
-| T1 | Workspace scaffold (root package.json, pnpm-workspace, tsconfig, biome, vitest) | delegated (writer trigger: 2+ files) | [x] | (see next row's commit for hash) |
-| T2 | Core engine + unit tests | delegated | [ ] | |
+| T1 | Workspace scaffold (root package.json, pnpm-workspace, tsconfig, biome, vitest) | delegated (writer trigger: 2+ files) | [x] | 1ddf457 |
+| T2 | Core engine + unit tests | delegated | [x] | (see T3 commit) |
 | T3 | Seed catalog modules + profiles | delegated | [ ] | |
 | T4 | CLI: commander `--cli` + JSON + clack TUI + integration test | delegated | [ ] | |
 | T5 | install.sh, README, AGENTS.md, CLAUDE.md | delegated | [ ] | |
@@ -45,6 +45,7 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 ## Progress / evidence
 - Repo initialized on `main` (5e871ad), work on `feat/monorepo-bootstrap`.
 - T1: root scaffold. Pinned: typescript 7.0.2, tsup 8.5.1, vitest 5.0.3, @biomejs/biome 2.5.15, @types/node 22.20.5. `pnpm install` needed `allowBuilds: { esbuild: true }` in pnpm-workspace.yaml (pnpm 12 fails on ignored build scripts). `pnpm lint`: ok (4 files). `pnpm build`/`pnpm typecheck`: ok (no packages yet). Test-first exception: scaffold has no behavior.
+- T2: core engine. RED observed (22/22 failing against empty index), then GREEN 22/22 (`vitest run --project core`). Covers merge semantics, idempotency, backups, symlinks, dry-run, path-escape rejection, requires ordering + cycles, command check/requiresBin skip with a fake PATH bin, status, doctor. `pnpm typecheck` ok, `pnpm lint` ok. Decisions: scalars from the catalog win in json-merge; backup timestamp replaces `:` with `-` (portable file names); apply re-evaluates each step against disk state; a step that cannot be applied (invalid existing JSON, dest is a directory) is planned as `skip` with `blocked: true` and fails on apply (exit 1).
 
 ## Next step
 Writer implements T1–T5 with one work-unit commit each.

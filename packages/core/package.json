@@ -1,0 +1,14 @@
+{
+  "name": "@claude-curated/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Catalog loading, planning and idempotent apply engine for claude-curated-config.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  }
+}

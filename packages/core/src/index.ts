@@ -1,0 +1,11 @@
+export { loadCatalog, resolveSelection } from "./catalog";
+export type { DoctorOptions } from "./doctor";
+export { doctor, MIN_NODE_MAJOR } from "./doctor";
+export type { ApplyOptions, PlanOptions, StatusOptions } from "./engine";
+export { apply, BACKUP_DIR_NAME, plan, status } from "./engine";
+export type { CatalogErrorCode } from "./errors";
+export { CatalogError } from "./errors";
+export { runArgv, which } from "./exec";
+export { changedPaths, deepMerge } from "./merge";
+export { resolveClaudeDir, resolveDest, resolveInside } from "./paths";
+export type * from "./types";
