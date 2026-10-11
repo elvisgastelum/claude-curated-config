@@ -6,7 +6,14 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/dist", "!**/coverage", "!**/node_modules", "!odd"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/coverage",
+      "!**/node_modules",
+      "!odd",
+      "!packages/catalog/modules/personal-*"
+    ]
   },
   "formatter": {
     "enabled": true,
