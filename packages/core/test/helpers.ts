@@ -21,6 +21,7 @@ export interface FixtureModule {
   secrets?: { name: string; description: string }[];
   inputs?: { name: string; description: string }[];
   provides?: Record<string, string[]>;
+  providesBins?: unknown;
   steps: unknown[];
   files?: Record<string, string>;
 }
@@ -44,6 +45,7 @@ export function writeCatalog(
         secrets: mod.secrets,
         inputs: mod.inputs,
         provides: mod.provides,
+        providesBins: mod.providesBins,
         steps: mod.steps,
       }),
     );

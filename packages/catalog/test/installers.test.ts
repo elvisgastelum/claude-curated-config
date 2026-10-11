@@ -208,3 +208,16 @@ describe("tool ownership", () => {
     expect(personal?.modules).toContain("core-settings");
   });
 });
+
+describe("tool modules", () => {
+  it("declare the binary they install in providesBins", () => {
+    for (const [id, bin] of [
+      ["tool-gentle-ai", "gentle-ai"],
+      ["tool-engram", "engram"],
+      ["tool-codegraph", "codegraph"],
+      ["tool-herdr", "herdr"],
+    ]) {
+      expect(byId.get(id as string)?.providesBins, id).toEqual([bin]);
+    }
+  });
+});

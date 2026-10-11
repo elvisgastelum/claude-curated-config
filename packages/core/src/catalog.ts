@@ -232,6 +232,12 @@ function loadModule(dir: string, dirName: string): CatalogModule {
     }
   }
   const provides = raw.provides === undefined ? undefined : validateProvides(raw.provides, fail);
+  if (
+    raw.providesBins !== undefined &&
+    !(isStringArray(raw.providesBins) && raw.providesBins.every((bin) => bin.trim() !== ""))
+  ) {
+    fail("providesBins must be a list of binary names");
+  }
   if (!Array.isArray(raw.steps)) fail("steps must be an array");
   const steps = (raw.steps as unknown[]).map((step, index) =>
     validateStep(step, dir, `module "${dirName}" step ${index + 1}`),
@@ -245,6 +251,7 @@ function loadModule(dir: string, dirName: string): CatalogModule {
     ...(raw.secrets ? { secrets: raw.secrets as unknown as ModuleSecret[] } : {}),
     ...(raw.inputs ? { inputs: raw.inputs as unknown as ModuleInput[] } : {}),
     ...(provides ? { provides } : {}),
+    ...(raw.providesBins ? { providesBins: raw.providesBins as string[] } : {}),
     steps,
     dir,
   };

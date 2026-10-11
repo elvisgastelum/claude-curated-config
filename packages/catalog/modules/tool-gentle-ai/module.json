@@ -3,6 +3,7 @@
   "name": "gentle-ai CLI",
   "description": "Installs the gentle-ai CLI with Homebrew (gentleman-programming/tap) when it is not on PATH. macOS, and Linux with Homebrew on Linux; skipped when brew is missing (install gentle-ai manually then).",
   "tags": ["tool", "installer"],
+  "providesBins": ["gentle-ai"],
   "steps": [
     {
       "type": "command",

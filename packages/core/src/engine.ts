@@ -55,6 +55,8 @@ interface Evaluation {
   needsSecret?: string;
   /** Every secret or input the blocked step references without a value. */
   needsValues?: string[];
+  /** The missing `requiresBin` a step is skipped for. */
+  missingBin?: string;
   /** Values without a value of a step skipped for a missing bin (it may run at apply). */
   deferredValues?: string[];
   /** json-merge: every difference from the current file is an undecided conflict. */
@@ -439,12 +441,14 @@ function evaluateCommand(
   const missingBin = [step.requiresBin ?? []].flat().find((bin) => !which(bin, env));
   if (missingBin) {
     // An earlier module may install the bin, and apply re-evaluates the step: its values are
-    // collected up front so it does not fail for a missing value then.
+    // collected up front so it does not fail for a missing value then (plan keeps them only
+    // when a module of the plan provides the bin).
     const deferred = referencedValues(step, mod).filter((name) => secrets[name] === undefined);
     return {
       action: "skip",
       reason: `"${missingBin}" not found on PATH`,
       summary,
+      missingBin,
       ...(deferred.length > 0 ? { deferredValues: deferred } : {}),
     };
   }
@@ -508,7 +512,8 @@ function evaluate(step: Step, mod: CatalogModule, ctx: EvalContext): Evaluation 
 function planModule(
   mod: CatalogModule,
   ctx: EvalContext,
-  conflicts: Conflict[] = [],
+  conflicts: Conflict[],
+  installable: ReadonlySet<string>,
 ): PlannedModule {
   return {
     id: mod.id,
@@ -540,7 +545,13 @@ function planModule(
       if (evaluation.blocked) planned.blocked = true;
       if (evaluation.needsSecret) planned.needsSecret = evaluation.needsSecret;
       if (evaluation.needsValues) planned.needsValues = evaluation.needsValues;
-      if (evaluation.deferredValues) planned.deferredValues = evaluation.deferredValues;
+      if (
+        evaluation.deferredValues &&
+        evaluation.missingBin &&
+        installable.has(evaluation.missingBin)
+      ) {
+        planned.deferredValues = evaluation.deferredValues;
+      }
       return planned;
     }),
   };
@@ -579,9 +590,12 @@ export function plan(options: PlanOptions): Plan {
     platform,
   };
   const conflicts: Conflict[] = [];
-  const modules = resolveSelection(options.catalog, options).map((mod) =>
-    planModule(mod, ctx, conflicts),
-  );
+  // Bins installed by the modules planned so far (including the current one).
+  const installable = new Set<string>();
+  const modules = resolveSelection(options.catalog, options).map((mod) => {
+    for (const bin of mod.providesBins ?? []) installable.add(bin);
+    return planModule(mod, ctx, conflicts, installable);
+  });
   const result: Plan = { claudeDir, modules, conflicts, resolutions, onConflict, platform };
   // Non-enumerable so a serialized plan never carries secret values.
   Object.defineProperty(result, "secretValues", { value: secrets, enumerable: false });
@@ -611,7 +625,8 @@ export function requiredSecrets(
  * Secrets and inputs the plan's steps need but have no value, deduplicated in plan order.
  * Steps whose check passes, or that are skipped for another reason, need none: only these
  * values have to be asked for before applying. A step skipped only because a `requiresBin` is
- * missing counts too: an earlier module may install the bin, and apply re-evaluates the step.
+ * missing counts too when a module earlier in the plan (or its own) lists that bin in
+ * `providesBins`: apply re-evaluates the step once the bin is installed.
  */
 export function neededValues(planned: Plan): string[] {
   return [

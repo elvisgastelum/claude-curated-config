@@ -745,11 +745,17 @@ describe("module inputs", () => {
     expect(neededValues(planned)).toEqual(["SERVICE_URL", "CCC_INPUT_HOST"]);
   });
 
-  it("needs the values of a step skipped for a missing bin, since apply re-evaluates it", () => {
-    const catalog = loadCatalog(
+  const needsToolCatalog = (providesBins?: unknown) =>
+    loadCatalog(
       writeCatalog([
         {
+          id: "tool-x",
+          ...(providesBins === undefined ? {} : { providesBins }),
+          steps: [{ type: "command", run: ["true"], check: ["true"] }],
+        },
+        {
           id: "needs-tool",
+          requires: ["tool-x"],
           inputs: [{ name: "SERVICE_URL", description: "url" }],
           steps: [
             {
@@ -762,10 +768,13 @@ describe("module inputs", () => {
         },
       ]),
     );
+
+  it("needs the values of a step whose missing bin an earlier module provides", () => {
+    const catalog = needsToolCatalog(["ccc-test-missing-tool"]);
     const env = { PATH: "/usr/bin:/bin" };
     const claudeDir = tempDir();
     const planned = plan({ catalog, claudeDir, modules: ["needs-tool"], env });
-    const step = planned.modules[0]?.steps[0];
+    const step = planned.modules.find((m) => m.id === "needs-tool")?.steps[0];
     expect(step).toMatchObject({
       action: "skip",
       reason: '"ccc-test-missing-tool" not found on PATH',
@@ -781,7 +790,65 @@ describe("module inputs", () => {
       secrets: { SERVICE_URL: "https://svc.example.test" },
     });
     expect(neededValues(withValue)).toEqual([]);
-    expect(status({ catalog, claudeDir, env }).modules[0]).toMatchObject({ skipped: 1 });
+    expect(
+      status({ catalog, claudeDir, env }).modules.find((m) => m.id === "needs-tool"),
+    ).toMatchObject({ skipped: 1 });
+  });
+
+  it("does not need the values of a step whose missing bin nothing in the plan installs", () => {
+    const env = { PATH: "/usr/bin:/bin" };
+    for (const providesBins of [undefined, ["other-tool"]]) {
+      const planned = plan({
+        catalog: needsToolCatalog(providesBins),
+        claudeDir: tempDir(),
+        modules: ["needs-tool"],
+        env,
+      });
+      const step = planned.modules.find((m) => m.id === "needs-tool")?.steps[0];
+      expect(step).toMatchObject({ action: "skip" });
+      expect(step?.deferredValues).toBeUndefined();
+      expect(neededValues(planned)).toEqual([]);
+    }
+  });
+
+  it("does not count a bin provided only by a module later in the plan", () => {
+    const catalog = loadCatalog(
+      writeCatalog([
+        {
+          id: "a-needs",
+          inputs: [{ name: "SERVICE_URL", description: "url" }],
+          steps: [
+            {
+              type: "command",
+              shell: `echo "$SERVICE_URL"`,
+              env: { SERVICE_URL: `\${SERVICE_URL}` },
+              requiresBin: "ccc-test-missing-tool",
+            },
+          ],
+        },
+        {
+          id: "z-tool",
+          providesBins: ["ccc-test-missing-tool"],
+          steps: [{ type: "command", run: ["true"], check: ["true"] }],
+        },
+      ]),
+    );
+    const planned = plan({
+      catalog,
+      claudeDir: tempDir(),
+      modules: ["a-needs", "z-tool"],
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    expect(planned.modules.map((m) => m.id)).toEqual(["a-needs", "z-tool"]);
+    expect(neededValues(planned)).toEqual([]);
+  });
+
+  it("validates providesBins", () => {
+    expect(() => needsToolCatalog("ccc-test-missing-tool")).toThrow(/providesBins/);
+    expect(() => needsToolCatalog([1])).toThrow(/providesBins/);
+    expect(needsToolCatalog(["x"]).modules.find((m) => m.id === "tool-x")?.providesBins).toEqual([
+      "x",
+    ]);
   });
 
   it("substitutes CCC_INPUT_* placeholders like secrets", () => {

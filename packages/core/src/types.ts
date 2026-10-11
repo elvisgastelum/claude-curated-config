@@ -117,6 +117,11 @@ export interface Module {
   /** Non-secret values (see {@link ModuleInput}). */
   inputs?: ModuleInput[];
   provides?: ModuleProvides;
+  /**
+   * Binaries this module installs. A step of this or a later module in the same plan that is
+   * skipped only because one of them is missing has its inputs and secrets asked up front.
+   */
+  providesBins?: string[];
   steps: Step[];
 }
 
@@ -166,8 +171,9 @@ export interface PlannedStep {
   /** Every secret or input the blocked step references without a value. */
   needsValues?: string[];
   /**
-   * Values without a value of a step skipped only because a `requiresBin` is missing: an
-   * earlier module may install it and apply re-evaluates the step, so they are asked up front.
+   * Values without a value of a step skipped only because a `requiresBin` is missing that a
+   * module earlier in the plan (or this one) installs (`providesBins`): apply re-evaluates
+   * the step, so they are asked up front.
    */
   deferredValues?: string[];
   step: Step;

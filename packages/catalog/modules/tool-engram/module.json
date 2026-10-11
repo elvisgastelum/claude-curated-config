@@ -3,6 +3,7 @@
   "name": "Engram CLI",
   "description": "Installs the engram persistent-memory CLI with Homebrew (gentleman-programming/tap) when it is not on PATH. macOS, and Linux with Homebrew on Linux; skipped when brew is missing.",
   "tags": ["tool", "installer"],
+  "providesBins": ["engram"],
   "steps": [
     {
       "type": "command",

@@ -798,6 +798,7 @@ describe("personal profile with fake installers", () => {
       mkdirSync(join(catalog, "profiles"), { recursive: true });
       // A fresh machine: jq is not on the PATH until tool-jq installs it.
       module("tool-jq", {
+        providesBins: ["jq"],
         steps: [
           {
             type: "command",
@@ -834,6 +835,39 @@ describe("personal profile with fake installers", () => {
       expect(ok.stderr).toBe("");
       expect(ok.code).toBe(0);
       expect(readFileSync(log, "utf8")).toBe("jq --version\nkaneo https://kaneo.example.test\n");
+    },
+  );
+
+  it.skipIf(existsSync("/bin/jq"))(
+    "does not ask for inputs of a step waiting on a tool nothing in the plan installs",
+    () => {
+      const home = temp();
+      const catalog = join(home, "catalog");
+      mkdirSync(join(catalog, "modules", "skill-kaneo"), { recursive: true });
+      mkdirSync(join(catalog, "profiles"), { recursive: true });
+      writeFileSync(
+        join(catalog, "modules", "skill-kaneo", "module.json"),
+        JSON.stringify({
+          id: "skill-kaneo",
+          name: "skill-kaneo",
+          description: "Fixture skill-kaneo",
+          inputs: [{ name: "KANEO_URL", description: "Base URL of your Kaneo instance" }],
+          steps: [
+            {
+              type: "command",
+              shell: 'jq --version && echo "kaneo $KANEO_URL"',
+              env: { KANEO_URL: `\${KANEO_URL}` },
+              requiresBin: ["jq"],
+            },
+          ],
+        }),
+      );
+      const env = { HOME: home, PATH: "/bin" };
+      const args = ["--cli", "--catalog", catalog, "--claude-dir", join(home, ".claude"), "--json"];
+      const result = ccc([...args, "apply", "-m", "skill-kaneo", "--yes"], env);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+      expect(JSON.stringify(result.json())).not.toContain("inputs_missing");
     },
   );
 

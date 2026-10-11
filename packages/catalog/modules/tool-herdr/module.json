@@ -3,6 +3,7 @@
   "name": "herdr CLI",
   "description": "Installs herdr (terminal agent multiplexer) with Homebrew when it is not on PATH. macOS, and Linux with Homebrew on Linux; skipped when brew is missing (TODO: no verified non-Homebrew Linux install).",
   "tags": ["tool", "installer"],
+  "providesBins": ["herdr"],
   "steps": [
     {
       "type": "command",
