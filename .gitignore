@@ -4,3 +4,6 @@ coverage/
 .ccc-backups/
 *.log
 .DS_Store
+
+# Local agent skill registry
+.atl/
