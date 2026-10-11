@@ -1,0 +1,27 @@
+{
+  "name": "@claude-curated/catalog",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Curated Claude Code modules and profiles (plain data).",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "modules",
+    "profiles",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@claude-curated/core": "workspace:*"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "id": "mcp-context7",
+  "name": "Context7 MCP server",
+  "description": "Registers the Context7 documentation MCP server for your user (needs the claude CLI).",
+  "tags": ["mcp", "docs"],
+  "steps": [
+    {
+      "type": "command",
+      "run": [
+        "claude",
+        "mcp",
+        "add",
+        "--scope",
+        "user",
+        "context7",
+        "--",
+        "npx",
+        "-y",
+        "@upstash/context7-mcp"
+      ],
+      "check": ["claude", "mcp", "get", "context7"],
+      "requiresBin": "claude"
+    }
+  ]
+}

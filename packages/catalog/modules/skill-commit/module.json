@@ -1,0 +1,7 @@
+{
+  "id": "skill-commit",
+  "name": "Commit skill",
+  "description": "Adds a skill that enforces title-only Conventional Commit messages.",
+  "tags": ["skills", "git"],
+  "steps": [{ "type": "file", "src": "SKILL.md", "dest": "skills/commit/SKILL.md" }]
+}
