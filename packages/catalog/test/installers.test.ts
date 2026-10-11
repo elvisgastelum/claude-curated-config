@@ -40,6 +40,13 @@ function check(id: string, env: NodeJS.ProcessEnv): number | null {
   }).status;
 }
 
+/** True when `jq` is on the PATH the checks run with (tests that run real jq skip otherwise). */
+const HAS_JQ =
+  spawnSync("sh", ["-c", "command -v jq"], {
+    env: { PATH: "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin" },
+    stdio: "ignore",
+  }).status === 0;
+
 function allFiles(dir: string): string[] {
   return readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((e) => e.isFile())
@@ -123,7 +130,7 @@ describe("jq-based checks", () => {
     return file;
   };
 
-  it("checks user-scope MCP servers with jq, not a text grep", () => {
+  it.skipIf(!HAS_JQ)("checks user-scope MCP servers with jq, not a text grep", () => {
     for (const [id, server] of [
       ["engram-claude", "engram"],
       ["codegraph-claude", "codegraph"],
@@ -148,7 +155,7 @@ describe("jq-based checks", () => {
     expect(kaneo({ projects: { "/x": { mcpServers: { kaneo: {} } } } })).not.toBe(0);
   });
 
-  it("checks gentle-ai state with jq on installed_agents", () => {
+  it.skipIf(!HAS_JQ)("checks gentle-ai state with jq on installed_agents", () => {
     expect([command("gentle-ai-claude").requiresBin].flat()).toContain("jq");
     const state = (doc: unknown) => {
       const home = temp();

@@ -16,6 +16,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { FAKE_SECRETS, writeClaudeFixture } from "../../core/test/capture-fixture";
 
+/** The fake installers and the MCP checks run real `jq` from /usr/bin:/bin. */
+const HAS_JQ =
+  spawnSync("sh", ["-c", "command -v jq"], { env: { PATH: "/usr/bin:/bin" } }).status === 0;
 const BIN = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const temps: string[] = [];
 
@@ -660,74 +663,77 @@ function fakeToolbox(home: string): { bin: string; log: string } {
 describe("personal profile with fake installers", () => {
   const RAW = "https://raw.githubusercontent.com/elvisgastelum";
 
-  it("installs tools before their setup, runs the installers, and is idempotent", () => {
-    const home = temp();
-    const { bin, log } = fakeToolbox(home);
-    const env = { HOME: home, PATH: `${bin}:/usr/bin:/bin`, KANEO_URL: "https://kaneo.test" };
-    const args = ["--cli", "apply", "--profile", "personal", "--yes", "--json"];
+  it.skipIf(!HAS_JQ)(
+    "installs tools before their setup, runs the installers, and is idempotent",
+    () => {
+      const home = temp();
+      const { bin, log } = fakeToolbox(home);
+      const env = { HOME: home, PATH: `${bin}:/usr/bin:/bin`, KANEO_URL: "https://kaneo.test" };
+      const args = ["--cli", "apply", "--profile", "personal", "--yes", "--json"];
 
-    const first = ccc(args, env);
-    expect(first.stderr).toBe("");
-    expect(first.code).toBe(0);
-    const calls = readFileSync(log, "utf8").trim().split("\n");
-    const at = (prefix: string) => {
-      const index = calls.findIndex((call) => call.startsWith(prefix));
-      expect(index, prefix).toBeGreaterThanOrEqual(0);
-      return index;
-    };
-    expect(at("brew install gentleman-programming/tap/gentle-ai")).toBeLessThan(
-      at("gentle-ai install --agent claude-code --scope global --preset full-gentleman"),
-    );
-    at("brew install gentleman-programming/tap/engram");
-    // gentle-ai registered engram first, so the fallback setup was not needed.
-    expect(calls.some((call) => call.startsWith("engram setup"))).toBe(false);
-    expect(at("npm install -g @colbymchenry/codegraph@1.6.0")).toBeLessThan(
-      at("codegraph install --yes --target claude --location global"),
-    );
-    expect(at("brew install herdr")).toBeLessThan(at("herdr integration install claude"));
-    for (const repo of [
-      "claude-commit-skill",
-      "kaneo-work-tracking-skill",
-      "claude-continue-skill",
-      "claude-statusline",
-      "herdr-config",
-    ]) {
-      const call = calls[at(`curl -fsSL ${RAW}/${repo}/`)] ?? "";
-      expect(call, repo).toMatch(new RegExp(`/${repo}/[0-9a-f]{40}/install\\.sh$`));
-    }
-    // configure-env is not in personal until it is published on npm.
-    expect(calls.some((call) => call.includes("@elvisgastelum/configure-env"))).toBe(false);
+      const first = ccc(args, env);
+      expect(first.stderr).toBe("");
+      expect(first.code).toBe(0);
+      const calls = readFileSync(log, "utf8").trim().split("\n");
+      const at = (prefix: string) => {
+        const index = calls.findIndex((call) => call.startsWith(prefix));
+        expect(index, prefix).toBeGreaterThanOrEqual(0);
+        return index;
+      };
+      expect(at("brew install gentleman-programming/tap/gentle-ai")).toBeLessThan(
+        at("gentle-ai install --agent claude-code --scope global --preset full-gentleman"),
+      );
+      at("brew install gentleman-programming/tap/engram");
+      // gentle-ai registered engram first, so the fallback setup was not needed.
+      expect(calls.some((call) => call.startsWith("engram setup"))).toBe(false);
+      expect(at("npm install -g @colbymchenry/codegraph@1.6.0")).toBeLessThan(
+        at("codegraph install --yes --target claude --location global"),
+      );
+      expect(at("brew install herdr")).toBeLessThan(at("herdr integration install claude"));
+      for (const repo of [
+        "claude-commit-skill",
+        "kaneo-work-tracking-skill",
+        "claude-continue-skill",
+        "claude-statusline",
+        "herdr-config",
+      ]) {
+        const call = calls[at(`curl -fsSL ${RAW}/${repo}/`)] ?? "";
+        expect(call, repo).toMatch(new RegExp(`/${repo}/[0-9a-f]{40}/install\\.sh$`));
+      }
+      // configure-env is not in personal until it is published on npm.
+      expect(calls.some((call) => call.includes("@elvisgastelum/configure-env"))).toBe(false);
 
-    // Installers got the target dirs and the overridable Kaneo URL through env.
-    const claudeDir = join(home, ".claude");
-    expect(existsSync(join(claudeDir, "skills/commit/SKILL.md"))).toBe(true);
-    expect(existsSync(join(claudeDir, "statusline.sh"))).toBe(true);
-    const servers = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")).mcpServers;
-    expect(Object.keys(servers).sort()).toEqual(["codegraph", "engram", "kaneo"]);
-    // The Kaneo URL came from the KANEO_URL input, REF from the pinned commit.
-    expect(servers.kaneo.url).toMatch(/^https:\/\/kaneo\.test [0-9a-f]{40}$/);
+      // Installers got the target dirs and the overridable Kaneo URL through env.
+      const claudeDir = join(home, ".claude");
+      expect(existsSync(join(claudeDir, "skills/commit/SKILL.md"))).toBe(true);
+      expect(existsSync(join(claudeDir, "statusline.sh"))).toBe(true);
+      const servers = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")).mcpServers;
+      expect(Object.keys(servers).sort()).toEqual(["codegraph", "engram", "kaneo"]);
+      // The Kaneo URL came from the KANEO_URL input, REF from the pinned commit.
+      expect(servers.kaneo.url).toMatch(/^https:\/\/kaneo\.test [0-9a-f]{40}$/);
 
-    const doc = first.json();
-    const context7 = (doc.modules as { id: string; steps: { status: string }[] }[]).find(
-      (m) => m.id === "mcp-context7",
-    );
-    expect(context7?.steps[0]?.status).toBe("skipped");
+      const doc = first.json();
+      const context7 = (doc.modules as { id: string; steps: { status: string }[] }[]).find(
+        (m) => m.id === "mcp-context7",
+      );
+      expect(context7?.steps[0]?.status).toBe("skipped");
 
-    const before = calls.length;
-    // Re-applying needs no KANEO_URL: the kaneo step's check passes, so it will not run.
-    const { KANEO_URL: _kaneo, ...withoutKaneo } = env;
-    const second = ccc(args, withoutKaneo);
-    expect(second.code).toBe(0);
-    const done = (
-      second.json().modules as { id: string; steps: { status: string; message: string }[] }[]
-    ).flatMap((m) =>
-      m.steps.filter((s) => s.status === "done").map((s) => `${m.id}: ${s.message}`),
-    );
-    expect(done).toEqual([]);
-    expect(new Set(statuses(second.json()))).toEqual(new Set(["unchanged", "skipped"]));
-    const again = readFileSync(log, "utf8").trim().split("\n").slice(before);
-    expect(again.every((call) => call === "herdr integration status")).toBe(true);
-  });
+      const before = calls.length;
+      // Re-applying needs no KANEO_URL: the kaneo step's check passes, so it will not run.
+      const { KANEO_URL: _kaneo, ...withoutKaneo } = env;
+      const second = ccc(args, withoutKaneo);
+      expect(second.code).toBe(0);
+      const done = (
+        second.json().modules as { id: string; steps: { status: string; message: string }[] }[]
+      ).flatMap((m) =>
+        m.steps.filter((s) => s.status === "done").map((s) => `${m.id}: ${s.message}`),
+      );
+      expect(done).toEqual([]);
+      expect(new Set(statuses(second.json()))).toEqual(new Set(["unchanged", "skipped"]));
+      const again = readFileSync(log, "utf8").trim().split("\n").slice(before);
+      expect(again.every((call) => call === "herdr integration status")).toBe(true);
+    },
+  );
 
   it("skips tool installs on an unsupported OS and ~/.claude-only setups for another dir", () => {
     const home = temp();
