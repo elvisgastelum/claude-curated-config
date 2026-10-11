@@ -102,6 +102,8 @@ Capture also never takes `skills/synced` or `skills/homelab-service-manager` (`C
 | `ignoreSettingsItems` | Regular expressions (JavaScript syntax, matched anywhere in the item): string items of any settings array outside `hooks` that match are removed and reported as `settings.json <pointer> <item>` with reason `ignored by capture config`. |
 | `privateDomains` | Domains whose host names the privacy scan replaces with `${CCC_INPUT_*}` inputs. `CCC_PRIVATE_DOMAINS` (comma-separated, empty for none) overrides this list. |
 
+Independently of the config, settings strings holding an absolute path inside a home directory (`/Users/<name>/`, `/home/<name>/`, `C:\Users\<name>\`, or the current `$HOME`) are left out and reported with reason `machine-local path`: array items such as `autoMode.environment` lines, object values, and whole hook or `statusLine` entries whose `command` has such a path. Strings that only reference remote URLs or `~/` stay. Paths are never rewritten to `~`: keep one-machine entries out of the portable catalog.
+
 Rules:
 
 - `dest` must stay inside the Claude dir (no absolute paths, no `..`); the loader rejects anything else.

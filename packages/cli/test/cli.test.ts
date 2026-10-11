@@ -624,12 +624,16 @@ describe("ccc --cli", () => {
     expect(bundled.code).toBe(0);
     expect(settingsOf(bundled.json())).toEqual([
       "settings.json /skipDangerousModePermissionPrompt: ignored by capture config",
+      "settings.json /autoMode/environment Repo: /Users/someone/Projects/app: machine-local path",
     ]);
 
     writeFileSync(join(out, "capture.config.json"), JSON.stringify({ ignoreSettings: ["/model"] }));
     const own = ccc([...base, "--out", out, "--dry-run"], { HOME: home });
     expect(own.code).toBe(0);
-    expect(settingsOf(own.json())).toEqual(["settings.json /model: ignored by capture config"]);
+    expect(settingsOf(own.json())).toEqual([
+      "settings.json /model: ignored by capture config",
+      "settings.json /autoMode/environment Repo: /Users/someone/Projects/app: machine-local path",
+    ]);
 
     writeFileSync(join(out, "capture.config.json"), JSON.stringify({ ignoreSettings: "/model" }));
     const invalid = ccc([...base, "--out", out, "--dry-run"], { HOME: home });

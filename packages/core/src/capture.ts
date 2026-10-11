@@ -69,6 +69,9 @@ export interface IgnoredSettingsItem {
  */
 export const CAPTURE_IGNORE_SETTINGS_ITEMS: readonly IgnoredSettingsItem[] = [];
 
+/** Reason reported for settings strings that hold an absolute path inside a home directory. */
+export const MACHINE_LOCAL_REASON = "machine-local path";
+
 export interface CaptureLimits {
   maxFiles: number;
   maxBytes: number;
@@ -148,6 +151,11 @@ export interface CaptureOptions {
   ignoreSettingsItems?: readonly IgnoredSettingsItem[];
   /** JSON pointers dropped from the captured settings (reported as ignored by the config). */
   ignoreSettings?: readonly string[];
+  /**
+   * Home directory treated as machine-local besides `/Users/<name>/`, `/home/<name>/` and
+   * `C:\Users\<name>\` (default `os.homedir()`).
+   */
+  home?: string;
   /**
    * Domains whose host names are private infrastructure (default
    * {@link DEFAULT_PRIVATE_DOMAINS}; see `privateDomainsFromEnv` for `CCC_PRIVATE_DOMAINS`).
@@ -473,6 +481,7 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
       if (removePointer(doc, pointer)) report(`settings.json ${pointer}`, CAPTURE_CONFIG_REASON);
     }
     withoutIgnoredItems(doc, options.ignoreSettingsItems ?? CAPTURE_IGNORE_SETTINGS_ITEMS, report);
+    withoutMachineLocal(doc, machineLocalTest(options.home ?? homedir()), report);
     add(
       "settings",
       "personal-settings",
@@ -750,6 +759,72 @@ function withoutIgnoredItems(
     return removed;
   };
   visit(doc, "");
+}
+
+/**
+ * Tests whether a string holds an absolute path inside a home directory: `/Users/<name>`,
+ * `/home/<name>`, `C:\Users\<name>` (either slash), or `home`. A path inside a URL
+ * (`https://host/Users/x/`) does not count: the path must not follow a host or word character.
+ */
+export function machineLocalTest(home: string): (value: string) => boolean {
+  const escapeRegex = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const roots = [
+    "/Users/[^/\\s\"']+",
+    "/home/[^/\\s\"']+",
+    "[A-Za-z]:[\\\\/]Users[\\\\/][^\\\\/\\s\"']+",
+  ];
+  const trimmed = home.replace(/[\\/]+$/, "");
+  if (trimmed) roots.push(escapeRegex(trimmed));
+  const pattern = new RegExp(`(?<![\\w.~/-])(?:${roots.join("|")})(?=$|[\\\\/\\s"'),;:])`);
+  return (value) => pattern.test(value);
+}
+
+/**
+ * Drops settings strings holding a machine-local path (reported with
+ * {@link MACHINE_LOCAL_REASON}): array items, object values, and the whole object of a
+ * `command` (hook entries, `statusLine`), so no half entry is left. Arrays and objects left
+ * empty are removed.
+ */
+function withoutMachineLocal(
+  doc: Record<string, Json>,
+  isLocal: (value: string) => boolean,
+  report: (path: string, reason: string) => void,
+): void {
+  const escapeKey = (key: string) => key.replaceAll("~", "~0").replaceAll("/", "~1");
+  const DROP = Symbol("drop");
+  const clean = (value: Json, pointer: string): Json | typeof DROP => {
+    if (Array.isArray(value)) {
+      const kept: Json[] = [];
+      value.forEach((item, index) => {
+        if (typeof item === "string" && isLocal(item)) {
+          report(`settings.json ${pointer} ${item}`, MACHINE_LOCAL_REASON);
+          return;
+        }
+        const out = clean(item, `${pointer}/${index}`);
+        if (out !== DROP) kept.push(out);
+      });
+      return value.length > 0 && kept.length === 0 ? DROP : kept;
+    }
+    if (!isPlainObject(value)) return value;
+    const out: Record<string, Json> = {};
+    for (const [key, item] of Object.entries(value)) {
+      const path = `${pointer}/${escapeKey(key)}`;
+      if (typeof item === "string" && isLocal(item)) {
+        report(`settings.json ${path}`, MACHINE_LOCAL_REASON);
+        // A command entry without its command would be broken: drop the whole entry.
+        if (key === "command") return DROP;
+        continue;
+      }
+      const cleaned = clean(item, path);
+      if (cleaned !== DROP) out[key] = cleaned;
+    }
+    return Object.keys(value).length > 0 && Object.keys(out).length === 0 ? DROP : out;
+  };
+  for (const key of Object.keys(doc)) {
+    const cleaned = clean(doc[key] as Json, `/${escapeKey(key)}`);
+    if (cleaned === DROP) delete doc[key];
+    else doc[key] = cleaned;
+  }
 }
 
 function statSafe(path: string) {

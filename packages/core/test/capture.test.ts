@@ -578,4 +578,53 @@ describe("settings left out of a capture", () => {
       },
     ]);
   });
+
+  it("drops strings with machine-local absolute paths and keeps remote references", () => {
+    const local = "Trusted repo: /Users/someone/Projects/app (my checkout)";
+    const remote = "Trusted repo: https://github.com/someone/app";
+    const { result, settings } = capture(
+      {
+        autoMode: { environment: [local, remote] },
+        env: {
+          TOOL: "/home/someone/bin/tool",
+          WIN: "C:\\Users\\someone\\bin",
+          HERE: "/opt/me/x",
+          TILDE: "~/bin/tool",
+          URL: "https://example.test/Users/someone/x",
+        },
+        statusLine: { type: "command", command: "bash /Users/someone/.claude/statusline.sh" },
+        hooks: {
+          Stop: [
+            {
+              hooks: [
+                { type: "command", command: "/Users/someone/hooks/stop.sh" },
+                { type: "command", command: "~/.claude/hooks/ok.sh" },
+              ],
+            },
+          ],
+          PreToolUse: [{ hooks: [{ type: "command", command: "/home/someone/x.sh" }] }],
+        },
+      },
+      { home: "/opt/me" },
+    );
+    expect(settings).toEqual({
+      autoMode: { environment: [remote] },
+      env: { TILDE: "~/bin/tool", URL: "https://example.test/Users/someone/x" },
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "~/.claude/hooks/ok.sh" }] }] },
+    });
+    const reasons = new Set(result.skipped.map((s) => s.reason));
+    expect(reasons).toEqual(new Set(["machine-local path"]));
+    expect(result.skipped.map((s) => s.path)).toEqual(
+      expect.arrayContaining([
+        `settings.json /autoMode/environment ${local}`,
+        "settings.json /env/TOOL",
+        "settings.json /env/WIN",
+        "settings.json /env/HERE",
+        "settings.json /statusLine/command",
+        "settings.json /hooks/Stop/0/hooks/0/command",
+        "settings.json /hooks/PreToolUse/0/hooks/0/command",
+      ]),
+    );
+    expect(JSON.stringify(settings)).not.toMatch(/someone\/Projects|\/home\/|\/opt\/me/);
+  });
 });
