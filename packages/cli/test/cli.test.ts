@@ -695,7 +695,8 @@ describe("personal profile with fake installers", () => {
       const call = calls[at(`curl -fsSL ${RAW}/${repo}/`)] ?? "";
       expect(call, repo).toMatch(new RegExp(`/${repo}/[0-9a-f]{40}/install\\.sh$`));
     }
-    at("npx -y @elvisgastelum/configure-env install skill --ci --scope user --mode copy");
+    // configure-env is not in personal until it is published on npm.
+    expect(calls.some((call) => call.includes("@elvisgastelum/configure-env"))).toBe(false);
 
     // Installers got the target dirs and the overridable Kaneo URL through env.
     const claudeDir = join(home, ".claude");

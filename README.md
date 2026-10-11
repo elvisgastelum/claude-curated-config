@@ -59,7 +59,7 @@ Exit codes: `0` ok, `1` a step failed (or, with `--dry-run`, would fail), `2` us
 |---------|---------|
 | `minimal` | `core-settings`, `global-instructions` |
 | `full` | a generic public setup: `core-settings`, `global-instructions`, `skill-commit`, `mcp-context7` |
-| `personal` | the maintainer's machine: `core-settings`, every tool and installer module below plus `mcp-context7` (asks for `KANEO_URL`); `ccc capture` appends `personal-*` modules for what is left |
+| `personal` | the maintainer's machine: `core-settings`, every tool and installer module below except `skill-configure-env` (not on npm yet) plus `mcp-context7` (asks for `KANEO_URL`); `ccc capture` appends `personal-*` modules for what is left |
 
 Profiles are listed in the TUI and `ccc list` by their `order` field (lowest first).
 
@@ -80,7 +80,7 @@ Most modules run the upstream installer of a tool or skill instead of copying a 
 | `mcp-context7` | Registers the Context7 MCP server (`@upstash/context7-mcp`, pinned version) with `claude mcp add --scope user` (skipped if `claude` is not installed). |
 | `skill-kaneo` | Runs the kaneo-work-tracking-skill installer (skill, CLAUDE.md block, `kaneo` MCP server). Needs the input `KANEO_URL`, your Kaneo base URL: asked in the TUI, read from the `KANEO_URL` env var in `--cli` mode (exit `2` `inputs_missing` without it). |
 | `skill-continue` | Runs the claude-continue-skill installer (`skills/continue`). |
-| `skill-configure-env` | `npx @elvisgastelum/configure-env install skill ...` (Node >= 22). |
+| `skill-configure-env` | `npx @elvisgastelum/configure-env install skill ...` (Node >= 22). Not in `personal`: the package is not published on npm yet, so the step fails until it is; select it explicitly once it is. |
 | `statusline` | Runs the claude-statusline installer (`statusline.sh` + `statusLine` setting; replaces an existing one). |
 | `tool-gentle-ai`, `tool-engram`, `tool-herdr` | `brew install` the tool when it is not on `PATH`. |
 | `tool-codegraph` | `npm install -g @colbymchenry/codegraph@1.6.0` when `codegraph` is not on `PATH`. |

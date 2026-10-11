@@ -67,9 +67,13 @@ describe("seed catalog", () => {
       ["personal", 30],
     ]);
     const personal = profiles.personal ?? [];
-    for (const id of [...TOOLS, ...Object.keys(SETUPS), ...INSTALLERS, "mcp-context7"]) {
+    const published = INSTALLERS.filter((id) => id !== "skill-configure-env");
+    for (const id of [...TOOLS, ...Object.keys(SETUPS), ...published, "mcp-context7"]) {
       expect(personal, id).toContain(id);
     }
+    // @elvisgastelum/configure-env is not on npm yet: the module stays, outside personal.
+    expect(personal).not.toContain("skill-configure-env");
+    expect(byId.get("skill-configure-env")?.description).toMatch(/not published on npm/);
     // Every setup module comes after the tool it needs.
     for (const [setup, tool] of Object.entries(SETUPS)) {
       expect(personal.indexOf(tool), setup).toBeLessThan(personal.indexOf(setup));

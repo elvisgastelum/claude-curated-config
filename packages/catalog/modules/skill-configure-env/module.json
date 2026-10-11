@@ -1,7 +1,7 @@
 {
   "id": "skill-configure-env",
   "name": "configure-env skill",
-  "description": "Installs the configure-env skill with `npx -y @elvisgastelum/configure-env install skill --ci --scope user --mode copy --agent claude` unless it is already there. Needs Node.js >= 22 and npx. Writes to ~/.claude only.",
+  "description": "Installs the configure-env skill with `npx -y @elvisgastelum/configure-env install skill --ci --scope user --mode copy --agent claude` unless it is already there. Needs Node.js >= 22 and npx. Writes to ~/.claude only. Not in the personal profile: @elvisgastelum/configure-env is not published on npm yet, so this step fails until it is (then pin a version and add it back).",
   "tags": ["skills", "installer"],
   "provides": {
     "paths": ["skills/configure-env"]
