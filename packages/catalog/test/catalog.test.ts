@@ -20,6 +20,13 @@ describe("seed catalog", () => {
     expect(profiles.full).toEqual(catalog.modules.map((m) => m.id));
   });
 
+  it("lists minimal before full", () => {
+    expect(catalog.profiles.map((p) => [p.id, p.order])).toEqual([
+      ["minimal", 10],
+      ["full", 20],
+    ]);
+  });
+
   it("plans the full profile against an empty claude dir", () => {
     const p = plan({
       catalog,

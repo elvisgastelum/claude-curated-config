@@ -110,6 +110,9 @@ function loadProfile(file: string, id: string, known: Set<string>): Profile {
   if (typeof raw.name !== "string" || typeof raw.description !== "string") {
     fail("name and description must be strings");
   }
+  if (raw.order !== undefined && (typeof raw.order !== "number" || !Number.isFinite(raw.order))) {
+    fail("order must be a number");
+  }
   if (!isStringArray(raw.modules) || raw.modules.length === 0) fail("modules must be non-empty");
   for (const moduleId of raw.modules as string[]) {
     if (!known.has(moduleId)) fail(`unknown module "${moduleId}"`);
@@ -118,8 +121,16 @@ function loadProfile(file: string, id: string, known: Set<string>): Profile {
     id,
     name: raw.name as string,
     description: raw.description as string,
+    ...(raw.order === undefined ? {} : { order: raw.order as number }),
     modules: raw.modules as string[],
   };
+}
+
+/** Lower `order` first, profiles without an order last, ties by id. */
+function compareProfiles(a: Profile, b: Profile): number {
+  const byOrder = (a.order ?? Number.POSITIVE_INFINITY) - (b.order ?? Number.POSITIVE_INFINITY);
+  if (byOrder !== 0 && !Number.isNaN(byOrder)) return byOrder;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
 /** Orders modules so that every module comes after the modules it requires. */
@@ -178,6 +189,7 @@ export function loadCatalog(dir: string): Catalog {
         .map((name) =>
           loadProfile(join(profilesDir, name), name.slice(0, -5), new Set(byId.keys())),
         )
+        .sort(compareProfiles)
     : [];
   return { dir: root, modules, profiles };
 }

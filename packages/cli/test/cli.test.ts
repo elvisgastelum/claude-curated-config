@@ -71,7 +71,10 @@ describe("ccc --cli", () => {
     expect(run.code).toBe(0);
     const doc = run.json();
     expect(doc.schema).toBe("ccc.list/v1");
-    expect((doc.profiles as { id: string }[]).map((p) => p.id)).toContain("minimal");
+    expect((doc.profiles as { id: string }[]).map((p) => p.id).slice(0, 2)).toEqual([
+      "minimal",
+      "full",
+    ]);
     expect((doc.modules as { id: string }[]).map((m) => m.id)).toContain("core-settings");
   });
 

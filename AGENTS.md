@@ -46,7 +46,7 @@ Rules:
 Every document has a `schema` field.
 
 - `ccc.doctor/v1`: `{ ok, checks: [{ id, ok, required, message, fix? }] }`. `ok` is false only if a `required` check fails. A missing `claude` CLI is a warning: `command` steps are skipped until it is installed.
-- `ccc.list/v1`: `{ catalogDir, modules: [{ id, name, description, tags, requires, steps }], profiles: [{ id, name, description, modules }] }`.
+- `ccc.list/v1`: `{ catalogDir, modules: [{ id, name, description, tags, requires, steps }], profiles: [{ id, name, description, order?, modules }] }`. Profiles are sorted by `order` (lower first), then id.
 - `ccc.plan/v1`: `{ claudeDir, selection, summary: { create, update, unchanged, run, skip }, modules: [{ id, name, steps: [{ index, type, action, reason, summary, dest?, command?, blocked }] }] }`. Modules are in apply order (required modules first).
 - `ccc.apply/v1`: `{ claudeDir, selection, dryRun, ok, backupDir, summary: { done, unchanged, skipped, failed, planned }, modules: [{ id, name, ok, steps: [{ index, type, action, status, message, dest?, command?, backup? }] }] }`.
 - `ccc.status/v1`: `{ claudeDir, modules: [{ id, name, state: "applied" | "partial" | "not-applied", satisfied, pending, skipped }] }`.

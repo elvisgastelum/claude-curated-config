@@ -38,6 +38,8 @@ export interface Profile {
   id: string;
   name: string;
   description: string;
+  /** Display order: lower first; profiles without one come last; ties sort by id. */
+  order?: number;
   modules: string[];
 }
 

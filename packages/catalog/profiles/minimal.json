@@ -2,5 +2,6 @@
   "id": "minimal",
   "name": "Minimal",
   "description": "Safe settings and starter global instructions.",
+  "order": 10,
   "modules": ["core-settings", "global-instructions"]
 }

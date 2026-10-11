@@ -25,7 +25,7 @@ export interface FixtureModule {
 /** Writes a catalog directory with the given modules and profiles. */
 export function writeCatalog(
   modules: FixtureModule[],
-  profiles: { id: string; modules: string[] }[] = [],
+  profiles: { id: string; modules: string[]; order?: unknown }[] = [],
 ): string {
   const root = tempDir("ccc-catalog-");
   for (const mod of modules) {

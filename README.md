@@ -56,6 +56,8 @@ Exit codes: `0` ok, `1` a step failed (or, with `--dry-run`, would fail), `2` us
 | `minimal` | `core-settings`, `global-instructions` |
 | `full` | everything in the catalog |
 
+Profiles are listed in the TUI and `ccc list` by their `order` field (lowest first).
+
 | Module | Installs |
 |--------|----------|
 | `core-settings` | Merges the settings schema and `permissions.deny` rules `Read(**/.env)`, `Read(**/.env.*)` and `Read(**/secrets/**)` (any depth) into `settings.json`. |

@@ -61,9 +61,12 @@ Create `profiles/<id>.json`:
   "id": "my-profile",
   "name": "My profile",
   "description": "What this set is for.",
+  "order": 50,
   "modules": ["core-settings", "my-module"]
 }
 ```
+
+`order` is optional: the TUI and `ccc list` show profiles by ascending `order` (`minimal` is 10, `full` 20, `personal` 30), then by id; profiles without one come last.
 
 ## Validate
 

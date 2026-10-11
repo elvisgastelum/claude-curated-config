@@ -126,6 +126,33 @@ describe("loadCatalog", () => {
   });
 });
 
+describe("profile order", () => {
+  it("sorts profiles by order (lower first), then id, with unordered profiles last", () => {
+    const dir = writeCatalog(
+      [{ id: "a", steps: [] }],
+      [
+        { id: "zeta", modules: ["a"] },
+        { id: "big", modules: ["a"], order: 20 },
+        { id: "alpha", modules: ["a"] },
+        { id: "small", modules: ["a"], order: 10 },
+        { id: "also-small", modules: ["a"], order: 10 },
+      ],
+    );
+    expect(loadCatalog(dir).profiles.map((p) => p.id)).toEqual([
+      "also-small",
+      "small",
+      "big",
+      "alpha",
+      "zeta",
+    ]);
+  });
+
+  it("rejects a non-numeric order", () => {
+    const dir = writeCatalog([{ id: "a", steps: [] }], [{ id: "p", modules: ["a"], order: "1" }]);
+    expect(() => loadCatalog(dir)).toThrow(/order/);
+  });
+});
+
 describe("resolveSelection", () => {
   it("adds required modules first in topological order", () => {
     const catalog = loadCatalog(basicCatalog());
