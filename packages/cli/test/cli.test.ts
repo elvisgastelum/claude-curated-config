@@ -183,6 +183,85 @@ describe("ccc --cli", () => {
     expect(doctor.json().schema).toBe("ccc.doctor/v1");
   });
 
+  it("refuses unresolved settings conflicts (exit 2) and applies them once resolved", () => {
+    const claudeDir = join(temp(), "claude");
+    mkdirSync(claudeDir);
+    const original = JSON.stringify({ $schema: "https://example.com/mine.json" });
+    writeFileSync(join(claudeDir, "settings.json"), original);
+    const args = ["--cli", "apply", "--profile", "minimal", "--yes", "--json"];
+
+    const refused = ccc([...args, "--claude-dir", claudeDir]);
+    expect(refused.code).toBe(2);
+    const doc = refused.json();
+    expect(doc.schema).toBe("ccc.error/v1");
+    const error = doc.error as {
+      code: string;
+      message: string;
+      conflicts: Record<string, unknown>[];
+    };
+    expect(error.code).toBe("conflicts_unresolved");
+    expect(error.conflicts).toEqual([
+      expect.objectContaining({
+        module: "core-settings",
+        path: "/$schema",
+        current: "https://example.com/mine.json",
+        flags: {
+          catalog: "--resolve 'core-settings:/$schema=catalog'",
+          keep: "--resolve 'core-settings:/$schema=keep'",
+        },
+      }),
+    ]);
+    expect(error.message).toContain("--on-conflict");
+    expect(readFileSync(join(claudeDir, "settings.json"), "utf8")).toBe(original);
+    expect(existsSync(join(claudeDir, "CLAUDE.md"))).toBe(false);
+
+    const plan = ccc([
+      "--cli",
+      "plan",
+      "--profile",
+      "minimal",
+      "--json",
+      "--claude-dir",
+      claudeDir,
+    ]);
+    expect((plan.json().conflicts as unknown[]).length).toBe(1);
+    const keepPlan = ccc([
+      "--cli",
+      "plan",
+      "--profile",
+      "minimal",
+      "--json",
+      "--on-conflict",
+      "keep",
+      "--claude-dir",
+      claudeDir,
+    ]).json();
+    expect((keepPlan.conflicts as { resolution: string }[])[0]?.resolution).toBe("keep");
+
+    const kept = ccc([...args, "--on-conflict", "keep", "--claude-dir", claudeDir]);
+    expect(kept.code).toBe(0);
+    const settings = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf8"));
+    expect(settings.$schema).toBe("https://example.com/mine.json");
+    expect(settings.permissions.deny).toContain("Read(**/.env)");
+
+    const replaced = ccc([
+      ...args,
+      "--resolve",
+      "core-settings:/$schema=catalog",
+      "--claude-dir",
+      claudeDir,
+    ]);
+    expect(replaced.code).toBe(0);
+    const after = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf8"));
+    expect(after.$schema).toContain("schemastore");
+  });
+
+  it("rejects a malformed --resolve with exit 2", () => {
+    const run = ccc(["--cli", "plan", "--profile", "minimal", "--resolve", "nope", "--json"]);
+    expect(run.code).toBe(2);
+    expect((run.json().error as { code: string }).code).toBe("invalid_resolve");
+  });
+
   it("runs command steps through a fake claude and skips them without it", () => {
     const binDir = temp();
     const log = join(binDir, "calls.log");

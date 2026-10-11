@@ -15,11 +15,14 @@ export const EXIT = { ok: 0, failure: 1, usage: 2, catalog: 3, cancelled: 130 } 
 /** A usage or refusal problem: exit code 2. */
 export class UsageError extends Error {
   readonly code: string;
+  /** Extra machine-readable fields merged into the `ccc.error/v1` error object. */
+  readonly details: Record<string, unknown>;
 
-  constructor(code: string, message: string) {
+  constructor(code: string, message: string, details: Record<string, unknown> = {}) {
     super(message);
     this.name = "UsageError";
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -33,8 +36,13 @@ export function writeJson(doc: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(doc, null, 2)}\n`);
 }
 
-export function errorDoc(code: string, message: string, exitCode: number) {
-  return { schema: "ccc.error/v1", error: { code, message }, exitCode };
+export function errorDoc(
+  code: string,
+  message: string,
+  exitCode: number,
+  details: Record<string, unknown> = {},
+) {
+  return { schema: "ccc.error/v1", error: { code, message, ...details }, exitCode };
 }
 
 const ACTIONS: PlanAction[] = ["create", "update", "unchanged", "run", "skip"];
@@ -86,6 +94,7 @@ export function planDoc(plan: Plan, selection: Selection) {
       name: m.name,
       steps: m.steps.map(({ step: _step, ...rest }) => ({ blocked: false, ...rest })),
     })),
+    conflicts: plan.conflicts,
   };
 }
 
@@ -147,6 +156,19 @@ export function renderPlan(plan: Plan, c: Colors): string {
       const color = actionColor(c, step.action);
       const detail = step.summary || step.reason;
       lines.push(`  ${color(step.action.padEnd(9))} ${target(step)} ${c.dim(detail)}`);
+    }
+  }
+  if (plan.conflicts.length > 0) {
+    lines.push("", c.yellow(c.bold(`Conflicts (${plan.conflicts.length})`)));
+    for (const conflict of plan.conflicts) {
+      const value = (v: unknown) => {
+        const text = JSON.stringify(v) ?? "undefined";
+        return text.length > 40 ? `${text.slice(0, 39)}…` : text;
+      };
+      const decided = conflict.resolution ? c.dim(` -> ${conflict.resolution}`) : "";
+      lines.push(
+        `  ${conflict.dest} ${conflict.path} ${c.dim(`(${conflict.module})`)}: ${value(conflict.current)} vs catalog ${value(conflict.catalog)}${decided}`,
+      );
     }
   }
   const summary = planSummary(plan);

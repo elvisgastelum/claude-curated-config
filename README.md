@@ -19,8 +19,9 @@ Running `ccc` in a terminal opens an interactive flow:
 1. A banner with the version and the target directory, plus warnings from `doctor` (for example, when the `claude` CLI is missing).
 2. Choose **Profile** (a curated set) or **Pick modules** (a multiselect with descriptions; already-applied modules are marked).
 3. A plan grouped by module, with colored actions: `create`, `update`, `unchanged`, `run`, `skip`.
-4. Confirm, then one spinner per module while it applies.
-5. A summary with the backup location and next steps.
+4. If one of your settings differs from the catalog value, one prompt per conflict shows both values: **Use catalog value** or **Keep my value** (or apply that choice to all remaining conflicts).
+5. Confirm, then one spinner per module while it applies.
+6. A summary with the backup location and next steps.
 
 Press Ctrl+C at any prompt to leave without further changes.
 
@@ -45,6 +46,8 @@ Global flags:
 | `--cli` / `--tui` | Force non-interactive mode / the TUI. |
 | `--json` | Print one JSON document to stdout (for scripts and agents). |
 | `--yes`, `--dry-run` | (`apply`) Skip confirmation / preview without writing. |
+| `--on-conflict <ask\|catalog\|keep>` | (`plan`, `apply`) Default decision for settings that differ from the catalog. |
+| `--resolve <module>:<pointer>=<catalog\|keep>` | (`plan`, `apply`) Decide one conflict, e.g. `--resolve 'core-settings:/model=keep'`. Repeatable. |
 | `--no-color`, `-v` | Disable colors / print the version. |
 
 Exit codes: `0` ok, `1` a step failed (or, with `--dry-run`, would fail), `2` usage error or refusal (for example `apply` without `--yes` outside a terminal), `3` catalog or validation error, `130` cancelled.
@@ -74,7 +77,7 @@ To add your own, see [packages/catalog/README.md](packages/catalog/README.md).
 - Writes are atomic (temp file + rename), so an interrupted run never leaves a half-written file.
 - A failing step does not stop the run: the rest of its module and the modules that require it are skipped, everything else is applied, and the report lists every step (exit code `1`).
 - If the installer fails on a fresh install it removes the partial checkout; if an update fails it restores and rebuilds the previous version.
-- `json-merge` keeps your existing keys and array entries; it only adds what the catalog defines (catalog values win for keys present in both).
+- `json-merge` keeps your existing keys and array entries and adds what the catalog defines. When one of your values differs from the catalog value, `ccc` asks which to keep (TUI) or refuses with exit `2` until you pass `--resolve`/`--on-conflict` (CLI). Nothing is written until every conflict is decided.
 - Idempotent: a second apply reports everything `unchanged`.
 - `--dry-run` and `plan` never write anything.
 - The catalog contains no secrets.

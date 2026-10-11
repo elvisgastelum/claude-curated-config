@@ -10,8 +10,16 @@ import {
   select,
   spinner,
 } from "@clack/prompts";
-import { doctor, plan, type Selection, startApply, status } from "@claude-curated/core";
+import {
+  doctor,
+  plan,
+  type Selection,
+  startApply,
+  status,
+  unresolvedConflicts,
+} from "@claude-curated/core";
 import type { Context } from "./commands";
+import { askConflicts } from "./conflicts";
 import { EXIT, pendingCount, renderPlan } from "./output";
 
 class Cancelled extends Error {}
@@ -85,8 +93,15 @@ export async function runTui(ctx: Context, version: string): Promise<number> {
       selection = { modules };
     }
 
-    const planned = plan({ catalog, claudeDir: ctx.claudeDir, ...selection });
+    let planned = plan({ catalog, claudeDir: ctx.claudeDir, ...selection });
     note(renderPlan(planned, c), "Plan");
+    const open = unresolvedConflicts(planned);
+    if (open.length > 0) {
+      log.warn(`${open.length} setting(s) in your files differ from the catalog.`);
+      const resolutions = await askConflicts(open, c);
+      if (!resolutions) throw new Cancelled();
+      planned = plan({ catalog, claudeDir: ctx.claudeDir, ...selection, resolutions });
+    }
     if (pendingCount(planned) === 0) {
       outro(c.green("Everything is already up to date."));
       return EXIT.ok;

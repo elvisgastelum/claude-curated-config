@@ -19,6 +19,7 @@ import {
   CatalogError,
   deepMerge,
   doctor,
+  findConflicts,
   loadCatalog,
   MIN_NODE_MAJOR,
   plan,
@@ -71,6 +72,33 @@ describe("deepMerge", () => {
     expect(deepMerge({ l: [{ a: 1 }] }, { l: [{ a: 1 }, { a: 2 }] })).toEqual({
       l: [{ a: 1 }, { a: 2 }],
     });
+  });
+});
+
+describe("findConflicts", () => {
+  it("reports differing leaves as JSON pointers; arrays and new keys never conflict", () => {
+    const existing = {
+      model: "opus",
+      permissions: { deny: ["a"], defaultMode: "plan" },
+      "a/b": { "c~d": 1 },
+      x: 1,
+    };
+    const src = {
+      model: "sonnet",
+      permissions: { deny: ["b"], defaultMode: "plan" },
+      "a/b": { "c~d": 2 },
+      y: 2,
+    };
+    expect(findConflicts(existing, src)).toEqual([
+      { path: "/model", current: "opus", catalog: "sonnet" },
+      { path: "/a~1b/c~0d", current: 1, catalog: 2 },
+    ]);
+  });
+
+  it("reports a type change as one conflict at that path", () => {
+    expect(findConflicts({ hooks: "none" }, { hooks: { a: 1 } })).toEqual([
+      { path: "/hooks", current: "none", catalog: { a: 1 } },
+    ]);
   });
 });
 
@@ -281,6 +309,88 @@ describe("plan and apply", () => {
     expect(readlinkSync(dest)).toBe(join(dir, "modules", "link", "agent.md"));
     const again = plan({ catalog, claudeDir, modules: ["link"], env: NO_BINS });
     expect(again.modules[0]?.steps[0]?.action).toBe("unchanged");
+  });
+});
+
+describe("json-merge conflicts", () => {
+  const setup = () => {
+    const catalog = loadCatalog(basicCatalog());
+    const claudeDir = tempDir();
+    const original = JSON.stringify({ theme: "light", permissions: { deny: ["Bash(rm:*)"] } });
+    writeFileSync(join(claudeDir, "settings.json"), original);
+    return { catalog, claudeDir, original };
+  };
+  const read = (dir: string) => JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
+
+  it("lists unresolved conflicts in the plan and refuses to apply them", () => {
+    const { catalog, claudeDir, original } = setup();
+    const p = plan({ catalog, claudeDir, modules: ["settings"], env: NO_BINS });
+    expect(p.conflicts).toEqual([
+      {
+        module: "settings",
+        step: 0,
+        dest: "settings.json",
+        path: "/theme",
+        current: "light",
+        catalog: "dark",
+      },
+    ]);
+    const result = apply(p, { env: NO_BINS });
+    expect(result.ok).toBe(false);
+    expect(result.modules[0]?.steps[0]?.status).toBe("failed");
+    expect(result.modules[0]?.steps[0]?.message).toMatch(/\/theme/);
+    expect(readFileSync(join(claudeDir, "settings.json"), "utf8")).toBe(original);
+  });
+
+  it("keeps the user's value when resolved as keep, and is then idempotent", () => {
+    const { catalog, claudeDir } = setup();
+    const p = plan({
+      catalog,
+      claudeDir,
+      modules: ["settings"],
+      env: NO_BINS,
+      resolutions: { "settings:/theme": "keep" },
+    });
+    expect(p.conflicts[0]?.resolution).toBe("keep");
+    expect(apply(p, { env: NO_BINS }).ok).toBe(true);
+    expect(read(claudeDir)).toEqual({
+      theme: "light",
+      permissions: { deny: ["Bash(rm:*)", "Read(./.env)"] },
+    });
+    const again = plan({
+      catalog,
+      claudeDir,
+      modules: ["settings"],
+      env: NO_BINS,
+      onConflict: "keep",
+    });
+    expect(again.modules[0]?.steps[0]?.action).toBe("unchanged");
+  });
+
+  it("uses the catalog value with onConflict catalog; explicit resolutions win", () => {
+    const { catalog, claudeDir } = setup();
+    const p = plan({
+      catalog,
+      claudeDir,
+      modules: ["settings"],
+      env: NO_BINS,
+      onConflict: "catalog",
+    });
+    expect(p.conflicts[0]?.resolution).toBe("catalog");
+    apply(p, { env: NO_BINS });
+    expect(read(claudeDir).theme).toBe("dark");
+
+    const other = setup();
+    const q = plan({
+      catalog: other.catalog,
+      claudeDir: other.claudeDir,
+      modules: ["settings"],
+      env: NO_BINS,
+      onConflict: "catalog",
+      resolutions: { "settings:/theme": "keep" },
+    });
+    apply(q, { env: NO_BINS });
+    expect(read(other.claudeDir).theme).toBe("light");
   });
 });
 

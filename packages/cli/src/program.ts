@@ -10,8 +10,8 @@ import {
   type GlobalOptions,
   isTty,
   listCommand,
+  type PlanFlags,
   planCommand,
-  type SelectionOptions,
   statusCommand,
 } from "./commands";
 import { EXIT, errorDoc, listDoc, UsageError, writeJson } from "./output";
@@ -49,7 +49,16 @@ function buildProgram(setExit: (code: number) => void, json: boolean): Command {
   const selectionFlags = (cmd: Command) =>
     cmd
       .option("-p, --profile <id>", "profile to use")
-      .option("-m, --module <id>", "module to include (repeatable)", collect);
+      .option("-m, --module <id>", "module to include (repeatable)", collect)
+      .option(
+        "--on-conflict <policy>",
+        "settings that differ from the catalog: ask (default), catalog or keep",
+      )
+      .option(
+        "--resolve <module:pointer=decision>",
+        "decide one conflict, e.g. core-settings:/model=keep (repeatable)",
+        collect,
+      );
 
   program.action(async (_opts, cmd: Command) => {
     const options = cmd.opts() as GlobalOptions;
@@ -72,7 +81,7 @@ function buildProgram(setExit: (code: number) => void, json: boolean): Command {
     .action(async (_opts, cmd: Command) => setExit(await listCommand(ctx(cmd))));
 
   selectionFlags(program.command("plan").description("show what apply would change")).action(
-    async (opts: SelectionOptions, cmd: Command) => setExit(await planCommand(ctx(cmd), opts)),
+    async (opts: PlanFlags, cmd: Command) => setExit(await planCommand(ctx(cmd), opts)),
   );
 
   selectionFlags(program.command("apply").description("apply a profile and/or modules"))
@@ -93,8 +102,14 @@ function buildProgram(setExit: (code: number) => void, json: boolean): Command {
   return program;
 }
 
-function fail(json: boolean, code: string, message: string, exitCode: number): number {
-  if (json) writeJson(errorDoc(code, message, exitCode));
+function fail(
+  json: boolean,
+  code: string,
+  message: string,
+  exitCode: number,
+  details: Record<string, unknown> = {},
+): number {
+  if (json) writeJson(errorDoc(code, message, exitCode, details));
   else process.stderr.write(`error: ${message}\n`);
   return exitCode;
 }
@@ -117,7 +132,9 @@ export async function run(argv: string[]): Promise<number> {
       const message = error.message.replace(/^error: /, "");
       return json ? fail(true, "usage", message, EXIT.usage) : EXIT.usage;
     }
-    if (error instanceof UsageError) return fail(json, error.code, error.message, EXIT.usage);
+    if (error instanceof UsageError) {
+      return fail(json, error.code, error.message, EXIT.usage, error.details);
+    }
     if (error instanceof CatalogError) return fail(json, error.code, error.message, EXIT.catalog);
     const message = error instanceof Error ? error.message : String(error);
     return fail(json, "internal_error", message, EXIT.failure);

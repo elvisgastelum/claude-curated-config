@@ -10,18 +10,22 @@ import {
   symlinkAtomic,
   writeFileAtomic,
 } from "./fsutil";
-import { changedPaths, deepMerge } from "./merge";
+import { changedPaths, deepMerge, findConflicts } from "./merge";
 import { resolveDest, resolveInside } from "./paths";
 import type {
   ApplyResult,
   Catalog,
   CatalogModule,
+  Conflict,
+  ConflictPolicy,
   ModuleResult,
   ModuleStatus,
   Plan,
   PlanAction,
   PlannedModule,
   PlannedStep,
+  Resolution,
+  Resolutions,
   Selection,
   StatusReport,
   Step,
@@ -42,6 +46,20 @@ interface Evaluation {
   content?: Buffer;
   /** Absolute symlink target for symlink steps. */
   linkTarget?: string;
+  /** json-merge values this step would overwrite (with their resolution when decided). */
+  conflicts?: Omit<Conflict, "module" | "step" | "dest">[];
+}
+
+/** Decides a conflict of `module` at a JSON pointer; undefined means "ask". */
+type Decide = (module: string, path: string) => Resolution | undefined;
+
+export function conflictKey(module: string, path: string): string {
+  return `${module}:${path}`;
+}
+
+function decider(resolutions: Resolutions = {}, onConflict: ConflictPolicy = "ask"): Decide {
+  return (module, path) =>
+    resolutions[conflictKey(module, path)] ?? (onConflict === "ask" ? undefined : onConflict);
 }
 
 function lineCount(text: string): number {
@@ -128,6 +146,7 @@ function evaluateJsonMerge(
   step: Extract<Step, { type: "json-merge" }>,
   mod: CatalogModule,
   claudeDir: string,
+  decide: Decide,
 ): Evaluation {
   const src = JSON.parse(readFileSync(resolveInside(mod.dir, step.src, "src"), "utf8"));
   const destPath = resolveDest(claudeDir, step.dest);
@@ -158,7 +177,14 @@ function evaluateJsonMerge(
       };
     }
   }
-  const merged = deepMerge(existing, src);
+  const conflicts: NonNullable<Evaluation["conflicts"]> = (
+    exists ? findConflicts(existing, src) : []
+  ).map((conflict) => {
+    const resolution = decide(mod.id, conflict.path);
+    return resolution ? { ...conflict, resolution } : conflict;
+  });
+  const keep = new Set(conflicts.filter((c) => c.resolution === "keep").map((c) => c.path));
+  const merged = deepMerge(existing, src, keep);
   const content = Buffer.from(`${JSON.stringify(merged, null, 2)}\n`);
   if (link && !exists) {
     return {
@@ -173,13 +199,17 @@ function evaluateJsonMerge(
   if (exists && changes.length === 0) {
     return { action: "unchanged", reason: "all keys already present", summary: "", destPath };
   }
+  const open = conflicts.filter((c) => !c.resolution).length;
   return {
     action: exists ? "update" : "create",
     reason: exists ? "merge new keys" : "file does not exist",
-    summary: exists ? `merges ${describePaths(changes)}` : "new JSON file",
+    summary: exists
+      ? `merges ${describePaths(changes)}${open ? ` (${open} conflict${open > 1 ? "s" : ""} to resolve)` : ""}`
+      : "new JSON file",
     destPath,
     writePath,
     content,
+    ...(conflicts.length ? { conflicts } : {}),
   };
 }
 
@@ -204,13 +234,14 @@ function evaluate(
   mod: CatalogModule,
   claudeDir: string,
   env: NodeJS.ProcessEnv,
+  decide: Decide,
 ): Evaluation {
   try {
     switch (step.type) {
       case "file":
         return evaluateFile(step, mod, claudeDir);
       case "json-merge":
-        return evaluateJsonMerge(step, mod, claudeDir);
+        return evaluateJsonMerge(step, mod, claudeDir, decide);
       case "command":
         return evaluateCommand(step, env);
     }
@@ -225,7 +256,13 @@ function evaluate(
   }
 }
 
-function planModule(mod: CatalogModule, claudeDir: string, env: NodeJS.ProcessEnv): PlannedModule {
+function planModule(
+  mod: CatalogModule,
+  claudeDir: string,
+  env: NodeJS.ProcessEnv,
+  decide: Decide,
+  conflicts: Conflict[] = [],
+): PlannedModule {
   return {
     id: mod.id,
     name: mod.name,
@@ -233,7 +270,15 @@ function planModule(mod: CatalogModule, claudeDir: string, env: NodeJS.ProcessEn
     dir: mod.dir,
     requires: mod.requires ?? [],
     steps: mod.steps.map((step, index) => {
-      const evaluation = evaluate(step, mod, claudeDir, env);
+      const evaluation = evaluate(step, mod, claudeDir, env, decide);
+      for (const conflict of evaluation.conflicts ?? []) {
+        conflicts.push({
+          module: mod.id,
+          step: index,
+          dest: (step as { dest: string }).dest,
+          ...conflict,
+        });
+      }
       const planned: PlannedStep = {
         index,
         type: step.type,
@@ -254,14 +299,28 @@ export interface PlanOptions extends Selection {
   catalog: Catalog;
   claudeDir: string;
   env?: NodeJS.ProcessEnv;
+  /** Explicit conflict decisions keyed `<module>:<JSON pointer>`. */
+  resolutions?: Resolutions;
+  /** Policy for conflicts without an explicit decision (default "ask": leave unresolved). */
+  onConflict?: ConflictPolicy;
 }
 
 /** Computes what applying the selection would do, without changing anything. */
 export function plan(options: PlanOptions): Plan {
   const claudeDir = resolve(options.claudeDir);
   const env = options.env ?? process.env;
-  const modules = resolveSelection(options.catalog, options);
-  return { claudeDir, modules: modules.map((mod) => planModule(mod, claudeDir, env)) };
+  const { resolutions = {}, onConflict = "ask" } = options;
+  const decide = decider(resolutions, onConflict);
+  const conflicts: Conflict[] = [];
+  const modules = resolveSelection(options.catalog, options).map((mod) =>
+    planModule(mod, claudeDir, env, decide, conflicts),
+  );
+  return { claudeDir, modules, conflicts, resolutions, onConflict };
+}
+
+/** Conflicts that still need a decision before the plan can be applied. */
+export function unresolvedConflicts(planned: Plan): Conflict[] {
+  return planned.conflicts.filter((conflict) => !conflict.resolution);
 }
 
 export interface ApplyOptions {
@@ -293,6 +352,7 @@ export function startApply(planToApply: Plan, options: ApplyOptions = {}): Apply
   const env = options.env ?? process.env;
   const dryRun = options.dryRun ?? false;
   const backups: BackupStore = createBackupStore(claudeDir, (options.now ?? (() => new Date()))());
+  const decide = decider(planToApply.resolutions, planToApply.onConflict);
   const failedModules = new Set<string>();
   const results: ModuleResult[] = [];
 
@@ -304,7 +364,7 @@ export function startApply(planToApply: Plan, options: ApplyOptions = {}): Apply
       command: planned.command,
     };
     const catalogModule: CatalogModule = { ...mod, steps: [] };
-    const evaluation = evaluate(planned.step, catalogModule, claudeDir, env);
+    const evaluation = evaluate(planned.step, catalogModule, claudeDir, env, decide);
     const result = (status: StepResult["status"], message: string): StepResult => ({
       ...base,
       action: evaluation.action,
@@ -315,6 +375,10 @@ export function startApply(planToApply: Plan, options: ApplyOptions = {}): Apply
       return result(evaluation.blocked ? "failed" : "skipped", evaluation.reason);
     }
     if (evaluation.action === "unchanged") return result("unchanged", evaluation.reason);
+    const open = (evaluation.conflicts ?? []).filter((c) => !c.resolution).map((c) => c.path);
+    if (open.length > 0) {
+      return result("failed", `unresolved conflicts in ${planned.dest}: ${open.join(", ")}`);
+    }
     if (dryRun) return result("planned", evaluation.summary || evaluation.reason);
     try {
       if (evaluation.action === "run") {
@@ -402,7 +466,7 @@ export function status(options: StatusOptions): StatusReport {
   const claudeDir = resolve(options.claudeDir);
   const env = options.env ?? process.env;
   const modules: ModuleStatus[] = options.catalog.modules.map((mod) => {
-    const planned = planModule(mod, claudeDir, env);
+    const planned = planModule(mod, claudeDir, env, decider());
     const count = (pred: (s: PlannedStep) => boolean) => planned.steps.filter(pred).length;
     const satisfied = count((s) => s.action === "unchanged");
     const skipped = count((s) => s.action === "skip" && !s.blocked);

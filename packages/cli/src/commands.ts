@@ -9,7 +9,9 @@ import {
   resolveClaudeDir,
   type Selection,
   status,
+  unresolvedConflicts,
 } from "@claude-curated/core";
+import { askConflicts, type ConflictFlags, conflictsError, parseConflictFlags } from "./conflicts";
 import {
   applyDoc,
   type Colors,
@@ -43,7 +45,9 @@ export interface SelectionOptions {
   module?: string[];
 }
 
-export interface ApplyFlags extends SelectionOptions {
+export interface PlanFlags extends SelectionOptions, ConflictFlags {}
+
+export interface ApplyFlags extends PlanFlags {
   yes?: boolean;
   dryRun?: boolean;
 }
@@ -103,9 +107,14 @@ export async function listCommand(ctx: Context): Promise<number> {
   return EXIT.ok;
 }
 
-export async function planCommand(ctx: Context, flags: SelectionOptions): Promise<number> {
+export async function planCommand(ctx: Context, flags: PlanFlags): Promise<number> {
   const selection = toSelection(flags);
-  const result = plan({ catalog: ctx.catalog(), claudeDir: ctx.claudeDir, ...selection });
+  const result = plan({
+    catalog: ctx.catalog(),
+    claudeDir: ctx.claudeDir,
+    ...selection,
+    ...parseConflictFlags(flags),
+  });
   if (ctx.options.json) writeJson(planDoc(result, selection));
   else print(`Claude dir: ${ctx.claudeDir}\n\n${renderPlan(result, ctx.colors)}`);
   return EXIT.ok;
@@ -113,7 +122,21 @@ export async function planCommand(ctx: Context, flags: SelectionOptions): Promis
 
 export async function applyCommand(ctx: Context, flags: ApplyFlags): Promise<number> {
   const selection = toSelection(flags);
-  const planned = plan({ catalog: ctx.catalog(), claudeDir: ctx.claudeDir, ...selection });
+  const conflictOptions = parseConflictFlags(flags);
+  const planFor = () =>
+    plan({ catalog: ctx.catalog(), claudeDir: ctx.claudeDir, ...selection, ...conflictOptions });
+  let planned = planFor();
+  const open = unresolvedConflicts(planned);
+  if (open.length > 0) {
+    if (!ctx.interactive) throw conflictsError(planned);
+    const decisions = await askConflicts(open, ctx.colors);
+    if (!decisions) {
+      cancel("Nothing was changed.");
+      return EXIT.cancelled;
+    }
+    Object.assign(conflictOptions.resolutions, decisions);
+    planned = planFor();
+  }
   const pending = pendingCount(planned);
 
   if (!flags.yes && !flags.dryRun && pending > 0) {

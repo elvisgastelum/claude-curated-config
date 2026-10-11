@@ -40,8 +40,8 @@ Strategy: `single-pr` (user decision 2026-10-11). Create public repo elvisgastel
 | T4 | CLI: commander `--cli` + JSON + clack TUI + integration test | delegated | [x] | 0c37e61 |
 | T5 | install.sh, README, AGENTS.md, CLAUDE.md | delegated | [x] | e441ca7 |
 | T6 | Review fixes (recursive deny globs, pin context7, unique backups, dry-run shows blocked, dangling symlinks, per-step errors, atomic writes, installer cleanup, docstring/dup cleanups) | delegated | [x] | 4c8d3d4 |
-| T7 | Explicit profile order (`order` field; minimal first) | delegated | [x] | (see Progress) |
-| T8 | json-merge conflict detection: TUI asks per conflict; `--cli` fails exit 2 listing conflicts unless `--on-conflict catalog\|keep` or `--resolve <module>:<json.path>=catalog\|keep` | delegated | [ ] | |
+| T7 | Explicit profile order (`order` field; minimal first) | delegated | [x] | f0a63fe |
+| T8 | json-merge conflict detection: TUI asks per conflict; `--cli` fails exit 2 listing conflicts unless `--on-conflict catalog\|keep` or `--resolve <module>:<json.path>=catalog\|keep` | delegated | [x] | (see Progress) |
 | T9 | `ccc capture`: import current ~/.claude into catalog modules + `personal` profile; secrets redacted to `${VAR}` placeholders filled at apply (TUI prompt / env in agent mode) | delegated | [ ] | |
 
 Route evidence: empty repo, 5 tasks across many non-trivial files → one bounded writer (mandatory writer trigger).
@@ -61,6 +61,8 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 - T6: RED observed (4 new core tests failing: backup collision, dry-run blocked, dangling symlink, per-step error), GREEN 43/43. Core: `fsutil.ts` (atomic temp+rename writes keeping the file mode, atomic symlink swap, lazy unique backup dir `<stamp>`, `<stamp>-1`, ... with `COPYFILE_EXCL` and numeric suffixes, symlinks backed up as symlinks); `startApply()` run object (TUI uses it so one run shares one backup dir) and `apply()` wrapper; evaluate errors become blocked steps; a failed step skips the rest of its module and transitive dependents (`PlannedModule.requires` added); dry-run reports blocked as `failed` and missing-bin as `skipped`. json-merge through a live symlink writes the real file (dotfiles), dangling links are replaced. `MIN_NODE_MAJOR` derives from root `engines.node`; install.sh reads the same value from the checkout. CLI test global setup always rebuilds dist. Catalog: `**/` deny globs, `@upstash/context7-mcp@4.3.0`. install.sh exercised in temp dirs with a fake failing `pnpm build`: fresh install exit 1 + checkout removed; fresh ok exit 0; update failing once -> reset to previous HEAD, rebuilt, exit 1 with "previous version is still installed", wrapper `--version` works.
 
 - T7: RED observed (4 failing: core order sort + validation, seed catalog order, CLI list order), GREEN 46/46. `Profile.order?: number` validated in the loader; `loadCatalog` sorts profiles by order (missing = last), then id, so `list`, `list --json` and the TUI share one order. `minimal` 10, `full` 20.
+
+- T8: RED observed (7 failing: findConflicts pointers/type change, plan conflicts + apply refusal, keep idempotent, catalog policy + explicit override, CLI exit 2 + resolved apply, malformed --resolve), GREEN 53/53. Paths are RFC 6901 JSON pointers; keys `<module>:<pointer>`. `Plan.conflicts` (+ `resolutions`, `onConflict` carried so apply re-evaluates with the same decisions); core refuses a step with undecided conflicts (`failed`). CLI: `--on-conflict`, repeatable `--resolve` (validated, exit 2 `invalid_resolve`), `ccc.error/v1` `conflicts_unresolved` with `error.conflicts[].flags` shell-quoted; `plan --json` always has `conflicts`. TUI and interactive `ccc apply` prompt per conflict with all-remaining shortcuts. Decisions are not persisted (open question).
 
 ## Follow-ups (advisory review findings → scheduled as T6/T7)
 - R1: `core-settings` deny rules are `./`-anchored; use `**/.env`, `**/.env.*`, `**/secrets/**`.

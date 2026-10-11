@@ -18,9 +18,19 @@ curl -fsSL "$URL" | bash -s -- --cli doctor --json
 #    when unspecified, and ask before choosing `full`.
 ccc --cli plan --profile minimal --json
 
-# 3. Apply.
+# 3. Apply (add --resolve / --on-conflict flags when the plan has conflicts, see below).
 ccc --cli apply --profile minimal --yes --json
 ```
+
+### Settings conflicts
+
+A `json-merge` step (e.g. `settings.json`) conflicts when the user's file already has a value at a path where the catalog has a different one. Arrays never conflict (they are unioned) and new keys are simply added. `apply` never overwrites a conflicting value without a decision:
+
+1. Read `conflicts` from `ccc --cli plan ... --json`. Each entry has `module`, `step`, `dest`, `path` (a JSON pointer), `current`, `catalog` and, when decided, `resolution`.
+2. If there are conflicts, show the human each `path` with its `current` and `catalog` values and ask which to use, unless they already told you (e.g. "keep my settings" means `keep`). Do not decide on their behalf.
+3. Re-run with the decisions: `--resolve <module>:<path>=catalog|keep` per conflict (repeatable; quote it, pointers can contain `$`), or `--on-conflict catalog|keep` for all of them. An explicit `--resolve` wins over `--on-conflict`.
+
+Without decisions, a non-interactive `apply` (including `--dry-run`) exits `2` with `ccc.error/v1` code `conflicts_unresolved`, writes nothing, and lists every conflict with the exact `--resolve` flags in `error.conflicts[].flags`. Decisions are not remembered: pass them again on later runs (`--on-conflict keep` keeps re-runs idempotent).
 
 If `ccc` is not on `PATH` after step 1, call `~/.local/bin/ccc`.
 
@@ -38,7 +48,7 @@ Rules:
 |------|---------|------------|
 | 0 | Success | Report the result. |
 | 1 | A step failed (or is blocked, also under `--dry-run`), or `doctor` found a required check failing | Read `message` on failed steps (or `fix` on failed checks), report, do not retry blindly. |
-| 2 | Usage error or refusal (e.g. `apply` without `--yes`) | Fix the arguments. |
+| 2 | Usage error or refusal (e.g. `apply` without `--yes`, or unresolved settings conflicts) | Fix the arguments; for `conflicts_unresolved`, ask the human and pass `--resolve`/`--on-conflict`. |
 | 3 | Catalog or validation error (unknown module or profile) | Run `list`, use a real id. |
 
 ### JSON documents
@@ -47,10 +57,10 @@ Every document has a `schema` field.
 
 - `ccc.doctor/v1`: `{ ok, checks: [{ id, ok, required, message, fix? }] }`. `ok` is false only if a `required` check fails. A missing `claude` CLI is a warning: `command` steps are skipped until it is installed.
 - `ccc.list/v1`: `{ catalogDir, modules: [{ id, name, description, tags, requires, steps }], profiles: [{ id, name, description, order?, modules }] }`. Profiles are sorted by `order` (lower first), then id.
-- `ccc.plan/v1`: `{ claudeDir, selection, summary: { create, update, unchanged, run, skip }, modules: [{ id, name, steps: [{ index, type, action, reason, summary, dest?, command?, blocked }] }] }`. Modules are in apply order (required modules first).
+- `ccc.plan/v1`: `{ claudeDir, selection, summary: { create, update, unchanged, run, skip }, modules: [{ id, name, steps: [{ index, type, action, reason, summary, dest?, command?, blocked }] }], conflicts: [{ module, step, dest, path, current, catalog, resolution? }] }`. Modules are in apply order (required modules first).
 - `ccc.apply/v1`: `{ claudeDir, selection, dryRun, ok, backupDir, summary: { done, unchanged, skipped, failed, planned }, modules: [{ id, name, ok, steps: [{ index, type, action, status, message, dest?, command?, backup? }] }] }`.
 - `ccc.status/v1`: `{ claudeDir, modules: [{ id, name, state: "applied" | "partial" | "not-applied", satisfied, pending, skipped }] }`.
-- `ccc.error/v1`: `{ error: { code, message }, exitCode }`.
+- `ccc.error/v1`: `{ error: { code, message, ...details }, exitCode }`. `conflicts_unresolved` adds `error.conflicts` (the plan conflicts plus `flags: { catalog, keep }`).
 
 Plan actions: `create` (new file), `update` (existing file changes, backed up first), `unchanged`, `run` (a command will run), `skip` (e.g. a required binary is missing; `blocked: true` means it cannot be applied and `apply`, including `--dry-run`, reports it as `failed`). A failed step never aborts the run: later steps of the same module and modules that require it are `skipped` with a message naming the failure, other modules still apply, and the full report is printed.
 

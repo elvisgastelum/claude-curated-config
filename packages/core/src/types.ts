@@ -1,3 +1,5 @@
+import type { Json } from "./merge";
+
 /** Copies (or symlinks) a file from the module directory into the Claude dir. */
 export interface FileStep {
   type: "file";
@@ -88,9 +90,37 @@ export interface PlannedModule {
   steps: PlannedStep[];
 }
 
+/** How a json-merge conflict is settled: take the catalog value or keep the current one. */
+export type Resolution = "catalog" | "keep";
+
+/** Default policy for conflicts without an explicit resolution. */
+export type ConflictPolicy = "ask" | Resolution;
+
+/** Explicit decisions keyed `<module>:<JSON pointer>`. */
+export type Resolutions = Record<string, Resolution>;
+
+/** A value in an existing JSON file that a json-merge step would overwrite. */
+export interface Conflict {
+  module: string;
+  /** Step index inside the module. */
+  step: number;
+  dest: string;
+  /** JSON pointer inside `dest`. */
+  path: string;
+  current: Json;
+  catalog: Json;
+  /** Set when a resolution or a non-"ask" policy decides this conflict. */
+  resolution?: Resolution;
+}
+
 export interface Plan {
   claudeDir: string;
   modules: PlannedModule[];
+  /** Every json-merge conflict, in plan order. */
+  conflicts: Conflict[];
+  /** Decisions used to plan; apply re-evaluates with the same ones. */
+  resolutions?: Resolutions;
+  onConflict?: ConflictPolicy;
 }
 
 export type StepStatus = "done" | "unchanged" | "skipped" | "failed" | "planned";

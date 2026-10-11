@@ -40,7 +40,7 @@ Step types:
 | Type | Behavior |
 |------|----------|
 | `file` | Copies `src` (relative to the module dir) to `dest` (relative to the Claude dir). `"mode": "symlink"` links to the catalog copy instead. |
-| `json-merge` | Deep-merges `src` into `dest`: objects merge, arrays are unioned without duplicates, catalog scalars win, existing keys are kept. A `dest` that is a symlink to a real file (e.g. a dotfiles repo) is merged through the link. |
+| `json-merge` | Deep-merges `src` into `dest`: objects merge, arrays are unioned without duplicates, existing keys are kept; a value that differs from the user's is a conflict the user decides (`--resolve`/`--on-conflict`, or a TUI prompt). A `dest` that is a symlink to a real file (e.g. a dotfiles repo) is merged through the link. |
 | `command` | Runs `run` as an argv (no shell). Skipped when `check` exits 0, or when `requiresBin` is not on `PATH`. |
 
 Rules:
