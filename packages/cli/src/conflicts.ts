@@ -8,7 +8,7 @@ import type {
   Resolutions,
 } from "@claude-curated/core";
 import { conflictKey, unresolvedConflicts } from "@claude-curated/core";
-import { type Colors, UsageError } from "./output";
+import { type Colors, truncate, UsageError } from "./output";
 
 const POLICIES: ConflictPolicy[] = ["ask", "catalog", "keep"];
 
@@ -79,8 +79,7 @@ export function conflictsError(planned: Plan): UsageError {
 
 /** Compact pretty JSON for display, truncated to `max` characters. */
 export function preview(value: Json, max = 400): string {
-  const text = JSON.stringify(value, null, 2) ?? "undefined";
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  return truncate(JSON.stringify(value, null, 2) ?? "undefined", max);
 }
 
 /**

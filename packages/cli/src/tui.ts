@@ -10,18 +10,17 @@ import {
   select,
   spinner,
 } from "@clack/prompts";
-import {
-  doctor,
-  plan,
-  type Selection,
-  startApply,
-  status,
-  unresolvedConflicts,
-} from "@claude-curated/core";
-import { captureCommand, collectSecrets } from "./capture";
-import type { Context } from "./commands";
-import { askConflicts } from "./conflicts";
+import { doctor, type ModuleState, type Selection, startApply, status } from "@claude-curated/core";
+import { captureCommand } from "./capture";
+import { type Context, envSecrets, preparePlan } from "./commands";
 import { EXIT, pendingCount, renderPlan } from "./output";
+
+const BADGE: Partial<Record<ModuleState, string>> = {
+  applied: " (applied)",
+  partial: " (partial)",
+  conflicts: " (applied, settings differ)",
+  "needs-secrets": " (needs secrets)",
+};
 
 class Cancelled extends Error {}
 
@@ -52,7 +51,9 @@ export async function runTui(ctx: Context, version: string): Promise<number> {
 
     const catalog = ctx.catalog();
     const installed = new Map(
-      status({ catalog, claudeDir: ctx.claudeDir }).modules.map((m) => [m.id, m.state]),
+      status({ catalog, claudeDir: ctx.claudeDir, secrets: envSecrets(catalog) }).modules.map(
+        (m) => [m.id, m.state],
+      ),
     );
 
     const how = unwrap(
@@ -92,8 +93,7 @@ export async function runTui(ctx: Context, version: string): Promise<number> {
           required: true,
           options: catalog.modules.map((m) => {
             const state = installed.get(m.id);
-            const badge =
-              state === "applied" ? " (applied)" : state === "partial" ? " (partial)" : "";
+            const badge = (state && BADGE[state]) ?? "";
             return { value: m.id, label: `${m.name}${badge}`, hint: m.description };
           }),
         }),
@@ -101,17 +101,18 @@ export async function runTui(ctx: Context, version: string): Promise<number> {
       selection = { modules };
     }
 
-    const secrets = await collectSecrets(ctx, catalog, selection, { prompt: true });
-    if (!secrets) throw new Cancelled();
-    let planned = plan({ catalog, claudeDir: ctx.claudeDir, ...selection, secrets });
+    const planned = await preparePlan(
+      ctx,
+      selection,
+      { onConflict: "ask", resolutions: {} },
+      {
+        prompt: true,
+        onConflicts: (open) =>
+          log.warn(`${open.length} setting(s) in your files differ from the catalog.`),
+      },
+    );
+    if (!planned) throw new Cancelled();
     note(renderPlan(planned, c), "Plan");
-    const open = unresolvedConflicts(planned);
-    if (open.length > 0) {
-      log.warn(`${open.length} setting(s) in your files differ from the catalog.`);
-      const resolutions = await askConflicts(open, c);
-      if (!resolutions) throw new Cancelled();
-      planned = plan({ catalog, claudeDir: ctx.claudeDir, ...selection, resolutions, secrets });
-    }
     if (pendingCount(planned) === 0) {
       outro(c.green("Everything is already up to date."));
       return EXIT.ok;

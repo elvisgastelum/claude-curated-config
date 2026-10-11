@@ -15,6 +15,7 @@ import {
   planCommand,
   statusCommand,
 } from "./commands";
+import type { ConflictFlags } from "./conflicts";
 import { EXIT, errorDoc, listDoc, UsageError, writeJson } from "./output";
 import { runTui } from "./tui";
 
@@ -111,8 +112,21 @@ function buildProgram(setExit: (code: number) => void, json: boolean): Command {
 
   program
     .command("status")
-    .description("show which modules are applied")
-    .action(async (_opts, cmd: Command) => setExit(await statusCommand(ctx(cmd))));
+    .description(
+      "show which modules are applied (secret values come from CCC_SECRET_* env vars; decisions are not remembered)",
+    )
+    .option(
+      "--on-conflict <policy>",
+      "treat undecided settings conflicts as: ask (default), catalog or keep",
+    )
+    .option(
+      "--resolve <module:pointer=decision>",
+      "decide one conflict, e.g. core-settings:/model=keep (repeatable)",
+      collect,
+    )
+    .action(async (opts: ConflictFlags, cmd: Command) =>
+      setExit(await statusCommand(ctx(cmd), opts)),
+    );
 
   program
     .command("doctor")

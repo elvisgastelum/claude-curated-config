@@ -339,6 +339,12 @@ describe("ccc --cli", () => {
       "--claude-dir",
       target,
     ];
+    const dryApply = ccc([...applyArgs, "--dry-run"], env);
+    expect(dryApply.code).toBe(0);
+    expect(dryApply.json().ok).toBe(true);
+    expect(dryApply.stdout).toContain("needs secret CCC_SECRET_SETTINGS_ANTHROPIC_API_KEY");
+    expect(existsSync(target)).toBe(false);
+
     const missing = ccc(applyArgs, env);
     expect(missing.code).toBe(2);
     const error = missing.json().error as { code: string; secrets: { name: string }[] };
@@ -369,6 +375,70 @@ describe("ccc --cli", () => {
     const settings = JSON.parse(readFileSync(join(target, "settings.json"), "utf8"));
     expect(settings.env.ANTHROPIC_API_KEY).toBe("env-CCC_SECRET_SETTINGS_ANTHROPIC_API_KEY");
     expect(statSync(join(target, "statusline.sh")).mode & 0o100).toBe(0o100);
+  });
+
+  it("requires --out when the catalog is the installer checkout or not in a git checkout", () => {
+    const home = temp();
+    const claudeDir = join(home, ".claude");
+    writeClaudeFixture(claudeDir, join(home, ".claude.json"), "~/.claude/statusline.sh");
+    const checkout = temp();
+    mkdirSync(join(checkout, ".git"));
+    const catalog = join(checkout, "packages/catalog");
+    mkdirSync(join(catalog, "modules"), { recursive: true });
+    mkdirSync(join(catalog, "profiles"));
+    const args = (cat: string) => [
+      "--cli",
+      "capture",
+      "--json",
+      "--dry-run",
+      "--claude-dir",
+      claudeDir,
+      "--catalog",
+      cat,
+    ];
+
+    const installed = ccc(args(catalog), { HOME: home, CCC_HOME: checkout });
+    expect(installed.code).toBe(2);
+    expect((installed.json().error as { code: string }).code).toBe("out_required");
+
+    const defaultHome = join(home, ".local/share/claude-curated-config");
+    mkdirSync(join(defaultHome, ".git"), { recursive: true });
+    mkdirSync(join(defaultHome, "packages/catalog"), { recursive: true });
+    const viaDefault = ccc(args(join(defaultHome, "packages/catalog")), { HOME: home });
+    expect((viaDefault.json().error as { code: string }).code).toBe("out_required");
+
+    const loose = temp();
+    const notGit = ccc(args(loose), { HOME: home });
+    expect(notGit.code).toBe(2);
+    expect((notGit.json().error as { code: string }).code).toBe("out_required");
+
+    const clone = ccc(args(catalog), { HOME: home });
+    expect(clone.code).toBe(0);
+    expect(clone.json().outDir).toBe(catalog);
+
+    const explicit = ccc([...args(loose), "--out", join(loose, "out")], {
+      HOME: home,
+      CCC_HOME: checkout,
+    });
+    expect(explicit.code).toBe(0);
+  });
+
+  it("status honors --on-conflict/--resolve and reports conflicts", () => {
+    const claudeDir = join(temp(), "claude");
+    ccc(["--cli", "apply", "--profile", "minimal", "--yes", "--claude-dir", claudeDir]);
+    const settings = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf8"));
+    settings.$schema = "https://example.com/mine.json";
+    writeFileSync(join(claudeDir, "settings.json"), JSON.stringify(settings));
+    const state = (extra: string[]) =>
+      (
+        ccc(["--cli", "status", "--json", "--claude-dir", claudeDir, ...extra]).json().modules as {
+          id: string;
+          state: string;
+        }[]
+      ).find((m) => m.id === "core-settings")?.state;
+    expect(state([])).toBe("conflicts");
+    expect(state(["--on-conflict", "keep"])).toBe("applied");
+    expect(state(["--resolve", "core-settings:/$schema=keep"])).toBe("applied");
   });
 
   it("rejects an unknown capture kind with exit 2", () => {

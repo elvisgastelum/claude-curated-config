@@ -21,7 +21,7 @@ import {
   doctor,
   findConflicts,
   loadCatalog,
-  MIN_NODE_MAJOR,
+  MIN_NODE_VERSION,
   plan,
   resolveClaudeDir,
   resolveDest,
@@ -583,6 +583,66 @@ describe("status", () => {
   });
 });
 
+describe("status inputs", () => {
+  const NAME = "CCC_SECRET_DEMO_TOKEN";
+
+  function secretCatalog() {
+    return loadCatalog(
+      writeCatalog([
+        {
+          id: "needs",
+          secrets: [{ name: NAME, description: "demo" }],
+          steps: [{ type: "json-merge", src: "s.json", dest: "settings.json" }],
+          files: { "s.json": JSON.stringify({ env: { TOKEN: `\${${NAME}}` } }) },
+        },
+      ]),
+    );
+  }
+
+  it("reports needs-secrets (not blocked) until the values are provided", () => {
+    const catalog = secretCatalog();
+    const claudeDir = tempDir();
+    const missing = status({ catalog, claudeDir, env: NO_BINS }).modules[0];
+    expect(missing).toMatchObject({ state: "needs-secrets", missingSecrets: [NAME] });
+    writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({ env: { TOKEN: "v" } }));
+    const provided = status({ catalog, claudeDir, env: NO_BINS, secrets: { [NAME]: "v" } });
+    expect(provided.modules[0]).toMatchObject({ state: "applied", missingSecrets: [] });
+  });
+
+  it("reports conflicts when the only differences are conflicts, and honors keep", () => {
+    const catalog = loadCatalog(
+      writeCatalog([
+        {
+          id: "s",
+          steps: [{ type: "json-merge", src: "s.json", dest: "settings.json" }],
+          files: { "s.json": JSON.stringify({ model: "opus" }) },
+        },
+        {
+          id: "more",
+          steps: [{ type: "json-merge", src: "m.json", dest: "other.json" }],
+          files: { "m.json": JSON.stringify({ model: "opus", extra: 1 }) },
+        },
+      ]),
+    );
+    const claudeDir = tempDir();
+    writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({ model: "sonnet" }));
+    writeFileSync(join(claudeDir, "other.json"), JSON.stringify({ model: "sonnet" }));
+    const states = (report: ReturnType<typeof status>) =>
+      Object.fromEntries(report.modules.map((m) => [m.id, m.state]));
+    expect(states(status({ catalog, claudeDir, env: NO_BINS }))).toEqual({
+      s: "conflicts",
+      more: "not-applied",
+    });
+    expect(states(status({ catalog, claudeDir, env: NO_BINS, onConflict: "keep" }))).toEqual({
+      s: "applied",
+      more: "not-applied",
+    });
+    expect(
+      states(status({ catalog, claudeDir, env: NO_BINS, resolutions: { "s:/model": "keep" } })).s,
+    ).toBe("applied");
+  });
+});
+
 describe("doctor", () => {
   it("reports checks with fixes and a writable claude dir", () => {
     const claudeDir = join(tempDir(), "new-claude");
@@ -595,18 +655,22 @@ describe("doctor", () => {
     expect(report.ok).toBe(true);
   });
 
-  it("reads the minimum Node major from the root package.json engines", async () => {
+  it("reads the minimum Node version from the root package.json engines", async () => {
     const root = JSON.parse(
       readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
     );
     const cli = JSON.parse(
       readFileSync(new URL("../../cli/package.json", import.meta.url), "utf8"),
     );
-    expect(root.engines.node).toBe(`>=${MIN_NODE_MAJOR}`);
+    expect(root.engines.node).toBe(`>=${MIN_NODE_VERSION}`);
+    expect(MIN_NODE_VERSION).toBe("20.12.0");
     expect(cli.engines.node).toBe(root.engines.node);
-    expect(doctor({ claudeDir: tempDir(), nodeVersion: `${MIN_NODE_MAJOR - 1}.0.0` }).ok).toBe(
-      false,
-    );
+    const ok = (nodeVersion: string) => doctor({ claudeDir: tempDir(), nodeVersion }).ok;
+    expect(ok("19.9.0")).toBe(false);
+    expect(ok("20.11.1")).toBe(false);
+    expect(ok("20.12.0")).toBe(true);
+    expect(ok("20.13.0")).toBe(true);
+    expect(ok("22.0.0")).toBe(true);
   });
 
   it("flags an unwritable claude dir", () => {

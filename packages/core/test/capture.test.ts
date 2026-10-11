@@ -1,4 +1,13 @@
-import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -45,7 +54,8 @@ describe("findSecrets", () => {
       findSecrets("-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----"),
     ).toHaveLength(1);
     expect(findSecrets("mcp__plugin_engram_engram__mem_search_everything")).toEqual([]);
-    expect(findSecrets("3f2c1a9b8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b")).toEqual([]);
+    // Long hex strings (including git SHAs) are treated as secrets: redaction errs on the safe side.
+    expect(findSecrets("3f2c1a9b8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b")).toHaveLength(1);
     expect(findSecrets("/Users/dev/.claude/skills/commit/SKILL.md")).toEqual([]);
   });
 });
@@ -235,5 +245,139 @@ describe("secrets at apply time", () => {
     const calls = readFileSync(log, "utf8");
     expect(calls).toContain("add-json");
     expect(calls, calls).toContain('"Authorization":"Bearer tok-123"');
+  });
+});
+
+describe("capture review 2", () => {
+  it("uses the mcp_ placeholder prefix and keeps every MCP secret out of argv", () => {
+    const { root, claudeDir, out } = fixture();
+    const claudeJson = join(root, "other.json");
+    writeFileSync(
+      claudeJson,
+      JSON.stringify({
+        mcpServers: {
+          brave: {
+            command: "npx",
+            args: ["-y", "brave-mcp", "--key", "brave-secret-1"],
+            env: { BRAVE_KEY: "brave-secret-2" },
+          },
+          remote: {
+            type: "http",
+            url: "https://mcp.example.com/?token=brave-secret-3",
+            headers: { "X-Api-Key": "brave-secret-4" },
+          },
+        },
+      }),
+    );
+    const result = captureClaudeConfig({ claudeDir, claudeJson, include: ["mcp"] });
+    writeCapture(result, { outDir: out });
+    for (const file of allFiles(out)) {
+      const text = readFileSync(file, "utf8");
+      for (const n of [1, 2, 3, 4]) expect(text).not.toContain(`brave-secret-${n}`);
+    }
+    const names = result.items.flatMap((item) => item.secrets.map((s) => s.name));
+    expect(names.length).toBe(4);
+    expect(names.every((name) => /^CCC_SECRET_MCP_(BRAVE|REMOTE)_/.test(name))).toBe(true);
+  });
+
+  it("does not follow symlinked directories and ignores build and venv dirs", () => {
+    const { root, claudeDir, claudeJson } = fixture();
+    const skill = join(claudeDir, "skills/commit");
+    mkdirSync(join(root, "elsewhere"));
+    writeFileSync(join(root, "elsewhere/leak.md"), "outside\n");
+    symlinkSync(join(root, "elsewhere"), join(skill, "linked"));
+    symlinkSync(".", join(skill, "loop"));
+    for (const dir of [".venv", "venv", "dist", "build", "target", ".next", ".cache", "coverage"]) {
+      mkdirSync(join(skill, dir));
+      writeFileSync(join(skill, dir, "x.txt"), "x\n");
+    }
+    const result = captureClaudeConfig({ claudeDir, claudeJson, include: ["skill"] });
+    const files = result.items.find((item) => item.id === "personal-skill-commit")?.files;
+    expect(files?.map((f) => f.path).sort()).toEqual(["SKILL.md", "scripts/run.sh"]);
+    expect(result.skipped).toEqual(
+      expect.arrayContaining([
+        { path: "skills/commit/linked", reason: "symlinked directory (not followed)" },
+        { path: "skills/commit/loop", reason: "symlinked directory (not followed)" },
+      ]),
+    );
+  });
+
+  it("skips an item over the file or byte cap with a reason", () => {
+    const { claudeDir, claudeJson } = fixture();
+    const many = join(claudeDir, "skills/many");
+    mkdirSync(many, { recursive: true });
+    for (let i = 0; i < 4; i += 1) writeFileSync(join(many, `f${i}.md`), "x\n");
+    const big = join(claudeDir, "skills/big");
+    mkdirSync(big, { recursive: true });
+    writeFileSync(join(big, "SKILL.md"), "y".repeat(200));
+    const result = captureClaudeConfig({
+      claudeDir,
+      claudeJson,
+      include: ["skill"],
+      limits: { maxFiles: 3, maxBytes: 100 },
+    });
+    const ids = result.items.map((item) => item.id);
+    expect(ids).not.toContain("personal-skill-many");
+    expect(ids).not.toContain("personal-skill-big");
+    expect(result.skipped).toEqual(
+      expect.arrayContaining([
+        { path: "skills/many/", reason: "more than 3 files" },
+        { path: "skills/big/", reason: "more than 100 bytes in total" },
+      ]),
+    );
+  });
+
+  it("reports an unreadable entry and keeps capturing the rest", () => {
+    const { claudeDir, claudeJson } = fixture();
+    const locked = join(claudeDir, "skills/commit/locked");
+    mkdirSync(locked);
+    writeFileSync(join(locked, "a.md"), "a\n");
+    chmodSync(locked, 0o000);
+    const secret = join(claudeDir, "agents/private.md");
+    writeFileSync(secret, "p\n");
+    chmodSync(secret, 0o000);
+    try {
+      const result = captureClaudeConfig({ claudeDir, claudeJson });
+      const ids = result.items.map((item) => item.id);
+      expect(ids).toContain("personal-skill-commit");
+      expect(ids).toContain("personal-agent-reviewer");
+      expect(ids).not.toContain("personal-agent-private");
+      const paths = result.skipped.map((s) => s.path);
+      expect(paths).toContain("skills/commit/locked");
+      expect(paths).toContain("agents/private.md");
+      expect(result.skipped.every((s) => s.reason.length > 0)).toBe(true);
+    } finally {
+      chmodSync(locked, 0o755);
+      chmodSync(secret, 0o644);
+    }
+  });
+
+  it("reports the personal profile as unchanged when nothing is written", () => {
+    const out = join(tempDir(), "catalog");
+    const empty = captureClaudeConfig({
+      claudeDir: join(tempDir(), "none"),
+      claudeJson: join(tempDir(), "none.json"),
+    });
+    const written = writeCapture(empty, { outDir: out });
+    expect(written.profile.action).toBe("unchanged");
+    expect(written.profile.modules).toEqual([]);
+    expect(() => statSync(out)).toThrow();
+  });
+});
+
+describe("dry-run without secret values", () => {
+  it("reports steps that need a secret as planned, not failed", () => {
+    const { claudeDir, claudeJson, out } = fixture();
+    writeCapture(captureClaudeConfig({ claudeDir, claudeJson, include: ["settings"] }), {
+      outDir: out,
+    });
+    const catalog = loadCatalog(out);
+    const p = plan({ catalog, claudeDir: tempDir(), modules: ["personal-settings"], env: NO_BINS });
+    const dry = apply(p, { dryRun: true, env: NO_BINS });
+    expect(dry.ok).toBe(true);
+    expect(dry.modules[0]?.steps[0]?.status).toBe("planned");
+    expect(dry.modules[0]?.steps[0]?.message).toMatch(/^needs secret CCC_SECRET_SETTINGS_/);
+    const real = apply(p, { env: NO_BINS });
+    expect(real.ok).toBe(false);
   });
 });

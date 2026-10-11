@@ -59,12 +59,17 @@ main() {
   fi
 
   # The minimum Node.js version lives in one place: the checkout's package.json `engines.node`.
+  # Compares the full major.minor.patch version, not just the major.
   check_node() {
-    local min major
-    min="$(cd "$home_dir" && node -p 'Number((/[0-9]+/.exec(require("./package.json").engines.node) || ["0"])[0])')" ||
+    local min
+    min="$(cd "$home_dir" && node -p '(/[0-9]+\.[0-9]+\.[0-9]+/.exec(require("./package.json").engines.node) || ["0.0.0"])[0]')" ||
       return 1
-    major="$(node -p 'process.versions.node.split(".")[0]')"
-    if [ "$major" -lt "$min" ]; then
+    if ! node -e '
+      const parse = (v) => v.split(".").map(Number);
+      const [a, b] = [parse(process.versions.node), parse(process.argv[1])];
+      const cmp = a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+      process.exit(cmp >= 0 ? 0 : 1);
+    ' "$min"; then
       printf '%serror:%s Node.js >= %s is required (found %s).\n  fix: %s\n' "$c_err" "$c_off" \
         "$min" "$(node --version)" "upgrade Node.js (e.g. 'nvm install 22'), then re-run." >&2
       return 1
@@ -116,7 +121,8 @@ main() {
   fi
 
   mkdir -p "$bin_dir"
-  printf '#!/bin/sh\nexec node "%s" "$@"\n' "$entry" >"$bin_dir/ccc"
+  # CCC_HOME tells ccc which checkout is the installer's (capture refuses to write into it).
+  printf '#!/bin/sh\nexport CCC_HOME="%s"\nexec node "%s" "$@"\n' "$home_dir" "$entry" >"$bin_dir/ccc"
   chmod +x "$bin_dir/ccc"
   say "Installed $bin_dir/ccc"
   case ":$PATH:" in
@@ -127,6 +133,7 @@ main() {
   if [ "${CCC_NO_RUN:-0}" = "1" ]; then
     return 0
   fi
+  export CCC_HOME="$home_dir"
   # With no arguments, start the TUI. Under `curl | bash` stdin is the pipe, so
   # reattach it to the terminal when one is available.
   if [ "$#" -eq 0 ] && [ ! -t 0 ] && (: </dev/tty) 2>/dev/null; then

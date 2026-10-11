@@ -4,8 +4,20 @@ import rootPkg from "../../../package.json" with { type: "json" };
 import { which } from "./exec";
 import type { DoctorCheck, DoctorReport } from "./types";
 
-/** Minimum Node.js major, read from the root package.json `engines.node` (single source). */
-export const MIN_NODE_MAJOR = Number(/\d+/.exec(rootPkg.engines.node)?.[0] ?? "20");
+/** Minimum Node.js version, read from the root package.json `engines.node` (single source). */
+export const MIN_NODE_VERSION: string =
+  /\d+\.\d+\.\d+/.exec(rootPkg.engines.node)?.[0] ?? "20.12.0";
+
+/** Compares two `major.minor.patch` versions (a leading `v` is ignored): <0, 0 or >0. */
+export function compareVersions(a: string, b: string): number {
+  const parse = (v: string) => v.replace(/^v/, "").split(/[.-]/).slice(0, 3).map(Number);
+  const [x, y] = [parse(a), parse(b)];
+  for (let i = 0; i < 3; i += 1) {
+    const diff = (x[i] || 0) - (y[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
 
 function writableDir(path: string): { ok: boolean; message: string } {
   let current = resolve(path);
@@ -36,20 +48,20 @@ export interface DoctorOptions {
 export function doctor(options: DoctorOptions): DoctorReport {
   const env = options.env ?? process.env;
   const nodeVersion = options.nodeVersion ?? process.versions.node;
-  const major = Number(nodeVersion.split(".")[0]);
+  const nodeOk = compareVersions(nodeVersion, MIN_NODE_VERSION) >= 0;
   const claude = which("claude", env);
   const git = which("git", env);
   const dir = writableDir(options.claudeDir);
   const checks: DoctorCheck[] = [
     {
       id: "node",
-      ok: major >= MIN_NODE_MAJOR,
+      ok: nodeOk,
       required: true,
       message: `node ${nodeVersion}`,
-      ...(major >= MIN_NODE_MAJOR
+      ...(nodeOk
         ? {}
         : {
-            fix: `install Node.js >= ${MIN_NODE_MAJOR} (e.g. via nvm, fnm or your package manager)`,
+            fix: `install Node.js >= ${MIN_NODE_VERSION} (e.g. via nvm, fnm or your package manager)`,
           }),
     },
     {

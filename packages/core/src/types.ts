@@ -86,6 +86,8 @@ export interface PlannedStep {
   command?: string[];
   /** True when the step cannot be applied (e.g. existing file is invalid JSON). */
   blocked?: boolean;
+  /** Set when the step is blocked only because this secret has no value. */
+  needsSecret?: string;
   step: Step;
 }
 
@@ -163,7 +165,14 @@ export interface ApplyResult {
   modules: ModuleResult[];
 }
 
-export type ModuleState = "applied" | "partial" | "not-applied";
+export type ModuleState =
+  | "applied"
+  | "partial"
+  | "not-applied"
+  /** Nothing pending except undecided json-merge conflicts. */
+  | "conflicts"
+  /** Declares secrets that were not provided, so the module cannot be evaluated. */
+  | "needs-secrets";
 
 export interface ModuleStatus {
   id: string;
@@ -172,6 +181,10 @@ export interface ModuleStatus {
   satisfied: number;
   pending: number;
   skipped: number;
+  /** json-merge steps whose only differences are undecided conflicts. */
+  conflicts: number;
+  /** Declared secrets without a value. */
+  missingSecrets: string[];
 }
 
 export interface StatusReport {

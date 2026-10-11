@@ -3,8 +3,10 @@ import { catalogDir as bundledCatalogDir } from "@claude-curated/catalog";
 import {
   apply,
   type Catalog,
+  type Conflict,
   doctor,
   loadCatalog,
+  type Plan,
   plan,
   resolveClaudeDir,
   type Selection,
@@ -12,7 +14,13 @@ import {
   unresolvedConflicts,
 } from "@claude-curated/core";
 import { collectSecrets, secretStatus } from "./capture";
-import { askConflicts, type ConflictFlags, conflictsError, parseConflictFlags } from "./conflicts";
+import {
+  askConflicts,
+  type ConflictFlags,
+  type ConflictOptions,
+  conflictsError,
+  parseConflictFlags,
+} from "./conflicts";
 import {
   applyDoc,
   type Colors,
@@ -123,33 +131,65 @@ export async function planCommand(ctx: Context, flags: PlanFlags): Promise<numbe
   return EXIT.ok;
 }
 
-export async function applyCommand(ctx: Context, flags: ApplyFlags): Promise<number> {
-  const selection = toSelection(flags);
-  const conflictOptions = parseConflictFlags(flags);
-  const secrets = await collectSecrets(ctx, ctx.catalog(), selection);
-  if (!secrets) {
-    cancel("Nothing was changed.");
-    return EXIT.cancelled;
-  }
+/** Secret values for every catalog module, taken from same-named environment variables. */
+export function envSecrets(catalog: Catalog): Record<string, string> {
+  return secretStatus(catalog, { modules: catalog.modules.map((m) => m.id) }).values;
+}
+
+export interface PreparePlanOptions {
+  /** Ask for missing secrets and undecided conflicts (otherwise exit 2 for either). */
+  prompt: boolean;
+  /** A dry run plans without secret values; steps that need one are marked. */
+  dryRun?: boolean;
+  /** Called before conflicts are asked about. */
+  onConflicts?: (open: Conflict[]) => void;
+}
+
+/**
+ * Collects secrets, plans the selection and settles json-merge conflicts. Shared by
+ * `ccc apply` and the TUI. Returns null when the user cancels a prompt.
+ */
+export async function preparePlan(
+  ctx: Context,
+  selection: Selection,
+  conflictOptions: ConflictOptions,
+  options: PreparePlanOptions,
+): Promise<Plan | null> {
+  const catalog = ctx.catalog();
+  const secrets = options.dryRun
+    ? secretStatus(catalog, selection).values
+    : await collectSecrets(ctx, catalog, selection, { prompt: options.prompt });
+  if (!secrets) return null;
+  const resolutions = { ...conflictOptions.resolutions };
   const planFor = () =>
     plan({
-      catalog: ctx.catalog(),
+      catalog,
       claudeDir: ctx.claudeDir,
       ...selection,
-      ...conflictOptions,
+      onConflict: conflictOptions.onConflict,
+      resolutions,
       secrets,
     });
-  let planned = planFor();
+  const planned = planFor();
   const open = unresolvedConflicts(planned);
-  if (open.length > 0) {
-    if (!ctx.interactive) throw conflictsError(planned);
-    const decisions = await askConflicts(open, ctx.colors);
-    if (!decisions) {
-      cancel("Nothing was changed.");
-      return EXIT.cancelled;
-    }
-    Object.assign(conflictOptions.resolutions, decisions);
-    planned = planFor();
+  if (open.length === 0) return planned;
+  if (!options.prompt) throw conflictsError(planned);
+  options.onConflicts?.(open);
+  const decisions = await askConflicts(open, ctx.colors);
+  if (!decisions) return null;
+  Object.assign(resolutions, decisions);
+  return planFor();
+}
+
+export async function applyCommand(ctx: Context, flags: ApplyFlags): Promise<number> {
+  const selection = toSelection(flags);
+  const planned = await preparePlan(ctx, selection, parseConflictFlags(flags), {
+    prompt: ctx.interactive,
+    dryRun: flags.dryRun,
+  });
+  if (!planned) {
+    cancel("Nothing was changed.");
+    return EXIT.cancelled;
   }
   const pending = pendingCount(planned);
 
@@ -179,8 +219,14 @@ export async function applyCommand(ctx: Context, flags: ApplyFlags): Promise<num
   return result.ok ? EXIT.ok : EXIT.failure;
 }
 
-export async function statusCommand(ctx: Context): Promise<number> {
-  const report = status({ catalog: ctx.catalog(), claudeDir: ctx.claudeDir });
+export async function statusCommand(ctx: Context, flags: ConflictFlags = {}): Promise<number> {
+  const catalog = ctx.catalog();
+  const report = status({
+    catalog,
+    claudeDir: ctx.claudeDir,
+    ...parseConflictFlags(flags),
+    secrets: envSecrets(catalog),
+  });
   if (ctx.options.json) writeJson(statusDoc(report));
   else print(renderStatus(report, ctx.colors));
   return EXIT.ok;

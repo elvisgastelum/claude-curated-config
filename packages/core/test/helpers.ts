@@ -18,6 +18,7 @@ export function tempDir(prefix = "ccc-core-"): string {
 export interface FixtureModule {
   id: string;
   requires?: string[];
+  secrets?: { name: string; description: string }[];
   steps: unknown[];
   files?: Record<string, string>;
 }
@@ -38,6 +39,7 @@ export function writeCatalog(
         name: `Module ${mod.id}`,
         description: `Fixture module ${mod.id}`,
         requires: mod.requires,
+        secrets: mod.secrets,
         steps: mod.steps,
       }),
     );

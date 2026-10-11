@@ -8,7 +8,7 @@ Set up Claude Code (`~/.claude`) on any machine from a curated catalog of settin
 curl -fsSL https://raw.githubusercontent.com/elvisgastelum/claude-curated-config/main/install.sh | bash
 ```
 
-Requirements: `git` and Node.js 20 or newer (the single source is `engines.node` in `package.json`; the installer and `ccc doctor` both read it). The installer enables pnpm through corepack, clones the repo to `~/.local/share/claude-curated-config` (or pulls if it is already there), builds it, adds a `ccc` command to `~/.local/bin`, and starts the TUI.
+Requirements: `git` and Node.js 20.12.0 or newer (the single source is `engines.node` in `package.json`; the installer and `ccc doctor` both read it). The installer enables pnpm through corepack, clones the repo to `~/.local/share/claude-curated-config` (or pulls if it is already there), builds it, adds a `ccc` command to `~/.local/bin`, and starts the TUI.
 
 Run `ccc` again any time to add modules or update to the latest catalog (re-run the one-liner to update the code).
 
@@ -34,7 +34,7 @@ Press Ctrl+C at any prompt to leave without further changes.
 | `ccc plan --profile <id>` | Shows what would change, without writing. |
 | `ccc apply --profile <id>` | Applies a profile; asks for confirmation. |
 | `ccc apply --module <id> --module <id>` | Applies specific modules (and what they require). |
-| `ccc status` | Shows which modules are applied, partial or not applied. |
+| `ccc status` | Shows which modules are applied, partial, not applied, only differ by settings conflicts (`conflicts`), or cannot be checked until their secrets are set (`needs-secrets`). Accepts `--on-conflict` and `--resolve` like `plan`; secret values come from `CCC_SECRET_*` environment variables. Decisions are never remembered between runs. |
 | `ccc doctor` | Checks Node, git, the `claude` CLI and the target directory. |
 | `ccc capture` | Imports your current config into catalog modules and a `personal` profile. |
 
@@ -89,22 +89,24 @@ To add your own, see [packages/catalog/README.md](packages/catalog/README.md).
 Turn the Claude Code config you already have into catalog modules, so you can commit it and apply it on other machines:
 
 ```sh
-ccc capture                         # TUI: pick items, review redactions, write
-ccc capture --dry-run               # preview without writing
-ccc --cli capture --yes --json      # non-interactive (agents, scripts)
+ccc capture                                          # TUI: pick items, review redactions, choose where to write
+ccc capture --out ~/code/claude-curated-config/packages/catalog --dry-run          # preview
+ccc --cli capture --out ~/code/claude-curated-config/packages/catalog --yes --json # agents, scripts
 ```
 
-It reads `~/.claude` (`CLAUDE.md`, `settings.json`, the status line script referenced by settings, `skills/*/`, `agents/*.md`, `commands/**/*.md`, `output-styles/*.md`) and the user-scope `mcpServers` from `~/.claude.json`, and writes one module per item into the catalog (`personal-settings`, `personal-claude-md`, `personal-skill-<name>`, `personal-mcp-<name>`, ...) plus a `personal` profile. Caches and state (`projects/`, `todos/`, `plugins/`, `history*`, logs, `.ccc-backups/`, ...) are ignored; plugins are captured through `enabledPlugins` and `extraKnownMarketplaces` in `settings.json`. MCP servers become `claude mcp add-json --scope user` commands.
+Write into your own clone of this repo, never into the installer's checkout (`~/.local/share/claude-curated-config` or `$CCC_HOME`): a later `ccc` update (`git pull --ff-only`) would conflict with the captured files. Outside the TUI, `--out` is required unless the catalog in use (`--catalog`) is inside a git checkout that is not the installer's; otherwise capture exits `2` (`out_required`). The TUI asks for the directory, defaulting to the catalog of the clone you run it from.
 
-Secrets are never written. Values under secret-looking keys (`token`, `secret`, `password`, `api_key`, `auth`, ...) and strings shaped like credentials (`sk-...`, `ghp_...`, `github_pat_...`, `xox?-...`, `AKIA...`, private keys, JWTs, long random strings) become `${CCC_SECRET_<NAME>}` placeholders, and the module declares them under `secrets`. Values that only reference environment variables (`${GITHUB_TOKEN}`) are kept. Capture prints every redaction (where and which placeholder, never the value).
+It reads `~/.claude` (`CLAUDE.md`, `settings.json`, the status line script referenced by settings, `skills/*/`, `agents/*.md`, `commands/**/*.md`, `output-styles/*.md`) and the user-scope `mcpServers` from `~/.claude.json`, and writes one module per item into the catalog (`personal-settings`, `personal-claude-md`, `personal-skill-<name>`, `personal-mcp-<name>`, ...) plus a `personal` profile. Caches and state (`projects/`, `todos/`, `plugins/`, `history*`, logs, `.ccc-backups/`, ...) and dependency or build directories (`node_modules`, `.venv`, `venv`, `dist`, `build`, `target`, `.next`, `.cache`, `coverage`) are ignored. Symlinked directories inside an item are not followed, unreadable entries are skipped, and an item with more than 500 files or 5 MB is skipped whole; every skipped path is reported with its reason; plugins are captured through `enabledPlugins` and `extraKnownMarketplaces` in `settings.json`. MCP servers become `claude mcp add-json --scope user` commands.
 
-Applying a module with secrets asks for each value in the TUI (masked input); in `--cli` mode it reads the environment variable of the same name and exits `2` (`secrets_missing`, listing the names) when one is missing, before writing anything.
+Secrets are never written. In JSON (settings, env maps, MCP `args`, `env` and `headers`) and scripts, values under secret-looking keys (`token`, `secret`, `password`, `api_key`, `auth`, `*_KEY`, `DATABASE_URL`, `*_CONNECTION_STRING`, ...) are replaced; markdown and text files only redact unambiguous names (`password:`, `token:`, `api_key:`, ...), so frontmatter such as `author:` stays intact. Everywhere, strings shaped like credentials are replaced: `sk-...` (incl. `sk-ant-`), `ghp_...`, `github_pat_...`, `xox?-...`, `AKIA...`, `npm_...`, `glpat-...`, `AIza...`, `hf_...`, private keys, JWTs, `Bearer` tokens, the password in `scheme://user:password@host`, `token=`/`key=`/`password=` URL parameters, hex strings of 32+ characters (git SHAs included) and long random strings. They become `${CCC_SECRET_<NAME>}` placeholders, and the module declares them under `secrets`; MCP servers keep the placeholder in their `add-json` argument until apply. Values that only reference environment variables (`${GITHUB_TOKEN}`) are kept. Capture prints every redaction (where and which placeholder, never the value).
+
+Applying a module with secrets asks for each value in the TUI (masked input); in `--cli` mode it reads the environment variable of the same name and exits `2` (`secrets_missing`, listing the names) when one is missing, before writing anything. `apply --dry-run` needs no values: those steps show as `needs secret <NAME>`.
 
 Re-running capture updates the personal modules in place (unchanged files are not rewritten). Always review the result with `git diff` before committing.
 
 | Flag | Meaning |
 |------|---------|
-| `--out <dir>` | Catalog directory to write (default: the catalog in use, `--catalog` or the bundled one). |
+| `--out <dir>` | Catalog directory to write. Required unless the catalog in use is inside a git checkout other than the installer's. |
 | `--claude-json <path>` | Where to read user MCP servers (default `~/.claude.json`, or `<claude-dir>/.claude.json` for a custom `--claude-dir`). |
 | `--include <kind>` | Only these kinds (repeatable): `claude-md`, `settings`, `statusline`, `skill`, `agent`, `command`, `output-style`, `mcp`. |
 | `--dry-run`, `--yes` | Preview / write without confirmation (required outside a terminal). |

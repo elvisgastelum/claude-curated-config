@@ -1,25 +1,64 @@
 import { isPlainObject, type Json, pointerJoin } from "./merge";
 
-/** Key names whose string values are treated as secrets. */
+/** Key-name fragments that mark a value as secret in structured data. */
 export const SECRET_KEY =
-  /token|secret|password|passwd|api[_-]?key|auth|credential|private[_-]?key|cookie|session/i;
+  /token|secret|password|passwd|api[_-]?key|auth(?!or(?!i[sz]ation))|credential|private[_-]?key|cookie|session|database[_-]?url|connection[_-]?string/i;
+/** `OPENAI_KEY`, `x-key`, `key`: a `key` suffix after a separator. */
+const KEY_SUFFIX = /(?:^|[_-])key$/i;
+/** `openaiKey`: a camelCase `Key` suffix (case-sensitive, so `monkey` does not match). */
+const CAMEL_KEY_SUFFIX = /[a-z0-9]Key$/;
+/**
+ * In prose (markdown, plain text) only an unambiguous name marks a secret, so frontmatter
+ * like `author:` or `session_notes:` is never redacted; value shapes still apply.
+ */
+const PROSE_SECRET_KEY =
+  /^(?:[\w.-]*[_.-])?(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|credentials?)$/i;
+const PROSE_FILE = /\.(md|markdown|mdx|txt)$/i;
+
+/** True when a key in structured data (JSON keys, env maps, headers, argv flags) names a secret. */
+export function isSecretKey(key: string): boolean {
+  return SECRET_KEY.test(key) || KEY_SUFFIX.test(key) || CAMEL_KEY_SUFFIX.test(key);
+}
 
 /** `${CCC_SECRET_NAME}`: a placeholder filled at plan/apply time from a secret value. */
 export const PLACEHOLDER = /\$\{(CCC_SECRET_[A-Z0-9_]+)\}/g;
 export const SECRET_NAME = /^CCC_SECRET_[A-Z0-9_]+$/;
 const HAS_PLACEHOLDER = /\$\{CCC_SECRET_[A-Z0-9_]+\}/;
 
-const SHAPES: RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-  /\bsk-[A-Za-z0-9_-]{16,}/g,
-  /\bgh[po]_[A-Za-z0-9]{20,}/g,
-  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
-  /\bxox[abp]-[A-Za-z0-9-]{10,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
-];
-const LONG_TOKEN = /[A-Za-z0-9+_=-]{32,}/g;
+/** A credential shape; with `group`, only that capture group is the secret. */
+interface Shape {
+  re: RegExp;
+  group?: number;
+  accept?: (match: string) => boolean;
+}
 
+// Order matters: earlier shapes win when spans overlap.
+const SHAPES: Shape[] = [
+  { re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g },
+  { re: /\bsk-[A-Za-z0-9_-]{16,}/g }, // OpenAI, Anthropic (sk-ant-)
+  { re: /\bgh[pousr]_[A-Za-z0-9]{20,}/g },
+  { re: /\bgithub_pat_[A-Za-z0-9_]{20,}/g },
+  { re: /\bxox[abp]-[A-Za-z0-9-]{10,}/g },
+  { re: /\bAKIA[0-9A-Z]{16}\b/g },
+  { re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
+  { re: /\bnpm_[A-Za-z0-9]{20,}/g },
+  { re: /\bglpat-[A-Za-z0-9_-]{20,}/g },
+  { re: /\bAIza[0-9A-Za-z_-]{30,}/g },
+  { re: /\bhf_[A-Za-z0-9]{20,}/g },
+  // `Bearer <token>`: keep the scheme, redact the credential.
+  { re: /\bBearer\s+([A-Za-z0-9._~+/-]{8,}=*)/gi, group: 1 },
+  // `scheme://user:password@host`: the password.
+  { re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:([^\s/@$][^\s/@]*)@/gi, group: 1 },
+  // `?token=...`, `&api_key=...`, `&password=...` in URLs.
+  {
+    re: /[?&][\w-]*(?:token|key|secret|password|passwd|pwd|sig|signature|auth)=([^&#\s"'<>$][^&#\s"'<>]*)/gi,
+    group: 1,
+  },
+  // Long hex (API keys, hashes; git SHAs too: redaction errs on the safe side).
+  { re: /\b[0-9a-fA-F]{32,}\b/g, accept: (m) => /[a-fA-F]/.test(m) && /\d/.test(m) },
+];
+/** Long base64/base64url-ish tokens; kept only when high-entropy. */
+const LONG_TOKEN = /[A-Za-z0-9+_=-]{32,}/g;
 function entropy(text: string): number {
   const counts = new Map<string, number>();
   for (const char of text) counts.set(char, (counts.get(char) ?? 0) + 1);
@@ -47,8 +86,18 @@ export function findSecrets(text: string): Span[] {
   const add = (start: number, end: number) => {
     if (!spans.some((s) => start < s.end && end > s.start)) spans.push({ start, end });
   };
-  for (const shape of SHAPES) {
-    for (const match of text.matchAll(shape)) add(match.index, match.index + match[0].length);
+  for (const { re, group, accept } of SHAPES) {
+    for (const match of text.matchAll(re)) {
+      if (accept && !accept(match[0])) continue;
+      if (group === undefined) {
+        add(match.index, match.index + match[0].length);
+        continue;
+      }
+      const value = match[group] ?? "";
+      // The credential is the last occurrence of the group inside the match.
+      const start = match.index + match[0].lastIndexOf(value);
+      if (value) add(start, start + value.length);
+    }
   }
   for (const match of text.matchAll(LONG_TOKEN)) {
     if (highEntropy(match[0])) add(match.index, match.index + match[0].length);
@@ -125,13 +174,19 @@ export class Redactor {
     return out + text.slice(last);
   }
 
-  /** Redacts `key: value` / `KEY=value` lines with secret-looking keys, then token shapes. */
+  /**
+   * Redacts `key: value` / `KEY=value` lines with secret-looking keys, then token shapes.
+   * Markdown and plain-text files only use unambiguous key names (see PROSE_SECRET_KEY).
+   */
   redactDocument(text: string, file: string): string {
     const lineOf = (offset: number) => `${file} line ${text.slice(0, offset).split("\n").length}`;
+    const secretKey = PROSE_FILE.test(file)
+      ? (key: string) => PROSE_SECRET_KEY.test(key)
+      : isSecretKey;
     const keyed = text.replace(
-      /^(\s*(?:[-*]\s+)?["']?)([\w.-]+)(["']?\s*[:=]\s*["']?)([^\s"'#]{8,})/gm,
+      /^(\s*(?:[-*]\s+)?(?:export\s+)?["']?)([\w.-]+)(["']?\s*[:=]\s*["']?)([^\s"'#]{8,})/gm,
       (whole, lead: string, key: string, sep: string, value: string, offset: number) => {
-        if (!SECRET_KEY.test(key) || isEnvReference(value) || HAS_PLACEHOLDER.test(value)) {
+        if (!secretKey(key) || isEnvReference(value) || HAS_PLACEHOLDER.test(value)) {
           return whole;
         }
         return `${lead}${key}${sep}${this.placeholder(value, key, lineOf(offset))}`;
@@ -149,7 +204,7 @@ export class Redactor {
     const where = (p: string) => `${file} ${p || "/"}`.trim();
     if (typeof value === "string") {
       if (HAS_PLACEHOLDER.test(value)) return value;
-      if (key && SECRET_KEY.test(key) && value !== "" && !isEnvReference(value)) {
+      if (key && isSecretKey(key) && value !== "" && !isEnvReference(value)) {
         // Keep an auth scheme ("Bearer <token>") so the placeholder holds only the credential.
         const scheme = /^(Bearer|Basic|Token)\s+(\S+)$/i.exec(value);
         if (scheme?.[1] && scheme[2]) {
@@ -186,18 +241,26 @@ export class Redactor {
   private redactArgFlag(item: Json, file: string, path: string): Json {
     if (typeof item !== "string") return this.redactJson(item, file, path, "");
     const match = /^(--?)?([\w-]+)=(.+)$/.exec(item);
-    if (match?.[2] && match[3] && SECRET_KEY.test(match[2]) && !isEnvReference(match[3])) {
+    if (match?.[2] && match[3] && isSecretKey(match[2]) && !isEnvReference(match[3])) {
       return `${match[1] ?? ""}${match[2]}=${this.placeholder(match[3], match[2], `${file} ${path}`)}`;
     }
     return this.redactJson(item, file, path);
   }
 }
 
-/** Replaces `${CCC_SECRET_*}` placeholders; throws naming the first missing value. */
+/** A `${CCC_SECRET_*}` placeholder has no value. */
+export class MissingSecretError extends Error {
+  constructor(readonly secret: string) {
+    super(`missing secret ${secret} (set it to apply this step)`);
+    this.name = "MissingSecretError";
+  }
+}
+
+/** Replaces `${CCC_SECRET_*}` placeholders; throws {@link MissingSecretError} for the first missing value. */
 export function substitute(text: string, values: Record<string, string>): string {
   return text.replace(PLACEHOLDER, (_whole, name: string) => {
     const value = values[name];
-    if (value === undefined) throw new Error(`missing secret ${name} (set it to apply this step)`);
+    if (value === undefined) throw new MissingSecretError(name);
     return value;
   });
 }
@@ -226,7 +289,7 @@ export function maskValues(text: string, values: Record<string, string>): string
 /** Masks secret-looking values in a JSON value for display (`<redacted>`). */
 export function maskJson(value: Json, values: Record<string, string> = {}, key = ""): Json {
   if (typeof value === "string") {
-    if (key && SECRET_KEY.test(key) && value !== "" && !isEnvReference(value)) return "<redacted>";
+    if (key && isSecretKey(key) && value !== "" && !isEnvReference(value)) return "<redacted>";
     let out = maskValues(value, values);
     for (const span of findSecrets(out).reverse()) {
       out = `${out.slice(0, span.start)}<redacted>${out.slice(span.end)}`;

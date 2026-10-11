@@ -1,3 +1,6 @@
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import {
   cancel,
   confirm,
@@ -8,6 +11,7 @@ import {
   note,
   outro,
   password,
+  text,
 } from "@clack/prompts";
 import {
   CAPTURE_KINDS,
@@ -46,6 +50,59 @@ function parseKinds(include: string[] = []): CaptureKind[] {
   return kinds as CaptureKind[];
 }
 
+/** The installer's checkout: `$CCC_HOME`, else `~/.local/share/claude-curated-config`. */
+export function installerHome(env: NodeJS.ProcessEnv = process.env): string {
+  return resolve(env.CCC_HOME || join(homedir(), ".local/share/claude-curated-config"));
+}
+
+function canonical(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/** Root of the git work tree containing `path` (a `.git` dir or file), or null. */
+export function gitRoot(path: string): string | null {
+  let dir = canonical(path);
+  for (;;) {
+    if (existsSync(join(dir, ".git"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
+ * Why captured modules may not be written into `catalogDir` without an explicit `--out`, or
+ * null when it is allowed: only a catalog inside a git checkout that is not the installer's
+ * (a later `git pull --ff-only` update of the installer checkout would refuse local changes).
+ */
+export function outRefusal(
+  catalogDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const root = gitRoot(catalogDir);
+  if (!root) return `the catalog ${catalogDir} is not inside a git checkout`;
+  if (root === canonical(installerHome(env))) {
+    return `the catalog ${catalogDir} is the installer's checkout (${root}); updates would conflict with captured files`;
+  }
+  return null;
+}
+
+/** `<root>/packages/catalog` when `cwd` is inside a claude-curated-config clone (not the installer's). */
+function cwdCatalog(cwd: string): string | null {
+  const root = gitRoot(cwd);
+  if (!root || root === canonical(installerHome())) return null;
+  try {
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    return pkg.name === "claude-curated-config" ? join(root, "packages", "catalog") : null;
+  } catch {
+    return null;
+  }
+}
+
 export function captureDoc(capture: CaptureResult, written: CaptureWriteResult) {
   const actions = new Map(written.modules.map((m) => [m.id, m.action]));
   return {
@@ -63,6 +120,7 @@ export function captureDoc(capture: CaptureResult, written: CaptureWriteResult) 
       secrets: item.secrets.map((s) => s.name),
     })),
     redactions: capture.redactions,
+    skipped: capture.skipped,
     warnings: capture.warnings,
     profile: written.profile,
   };
@@ -75,12 +133,17 @@ export function renderRedactions(redactions: Redaction[], c: Colors): string {
     .join("\n");
 }
 
+export function renderSkipped(capture: CaptureResult, c: Colors): string {
+  return capture.skipped.map((s) => `${s.path} ${c.dim(s.reason)}`).join("\n");
+}
+
 function renderCapture(capture: CaptureResult, written: CaptureWriteResult, c: Colors): string {
   const lines = written.modules.map(
     (m) => `  ${m.action.padEnd(9)} ${m.id} ${c.dim(`(${m.files.length} files)`)}`,
   );
   lines.push(`  ${written.profile.action.padEnd(9)} profiles/${written.profile.id}.json`);
   lines.push("", c.bold("Redacted secrets"), renderRedactions(capture.redactions, c));
+  if (capture.skipped.length > 0) lines.push("", c.bold("Skipped"), renderSkipped(capture, c));
   for (const warning of capture.warnings) lines.push(c.yellow(`warning: ${warning}`));
   lines.push(
     "",
@@ -95,10 +158,17 @@ function renderCapture(capture: CaptureResult, written: CaptureWriteResult, c: C
 export async function captureCommand(ctx: Context, flags: CaptureFlags): Promise<number> {
   const include = parseKinds(flags.include);
   const claudeJson = flags.claudeJson ?? defaultClaudeJson(ctx.claudeDir);
-  const outDir = flags.out ?? ctx.catalogPath;
   if (ctx.interactive && !flags.yes && !flags.dryRun) {
-    return captureTui(ctx, { claudeJson, outDir, include });
+    return captureTui(ctx, { claudeJson, out: flags.out, include });
   }
+  const refusal = flags.out ? null : outRefusal(ctx.catalogPath);
+  if (refusal) {
+    throw new UsageError(
+      "out_required",
+      `${refusal}; pass --out <your clone>/packages/catalog (nothing was written)`,
+    );
+  }
+  const outDir = resolve(flags.out ?? ctx.catalogPath);
   if (!flags.yes && !flags.dryRun) {
     throw new UsageError(
       "confirmation_required",
@@ -114,7 +184,7 @@ export async function captureCommand(ctx: Context, flags: CaptureFlags): Promise
 
 async function captureTui(
   ctx: Context,
-  options: { claudeJson: string; outDir: string; include: CaptureKind[] },
+  options: { claudeJson: string; out?: string; include: CaptureKind[] },
 ): Promise<number> {
   const c = ctx.colors;
   intro(c.bgCyan(c.black(" ccc capture ")));
@@ -150,8 +220,14 @@ async function captureTui(
     redactions: capture.redactions.filter((r) => keep.has(r.module)),
   };
   note(renderRedactions(selected.redactions, c), "Secrets replaced with placeholders");
+  if (selected.skipped.length > 0) note(renderSkipped(selected, c), "Not captured");
   for (const warning of selected.warnings) log.warn(warning);
-  const preview = writeCapture(selected, { outDir: options.outDir, dryRun: true });
+  const outDir = options.out ? resolve(options.out) : await askOutDir(ctx);
+  if (!outDir) {
+    cancel("Nothing was written.");
+    return EXIT.cancelled;
+  }
+  const preview = writeCapture(selected, { outDir, dryRun: true });
   note(
     preview.modules.map((m) => `${m.action.padEnd(9)} ${m.id}`).join("\n"),
     `Write to ${preview.outDir}`,
@@ -161,11 +237,29 @@ async function captureTui(
     cancel("Nothing was written.");
     return isCancel(go) ? EXIT.cancelled : EXIT.ok;
   }
-  writeCapture(selected, { outDir: options.outDir });
+  writeCapture(selected, { outDir });
   outro(
-    `Captured ${selected.items.length} module(s) and the "personal" profile. Review the git diff in ${options.outDir}, then commit.`,
+    `Captured ${selected.items.length} module(s) and the "personal" profile. Review the git diff in ${outDir}, then commit.`,
   );
   return EXIT.ok;
+}
+
+/**
+ * Asks where to write the captured modules. The default is the catalog of the
+ * claude-curated-config clone in the current directory, else the catalog in use when it may
+ * be written. Returns null on cancel.
+ */
+async function askOutDir(ctx: Context): Promise<string | null> {
+  const fallback = outRefusal(ctx.catalogPath) ? null : ctx.catalogPath;
+  const initial = cwdCatalog(process.cwd()) ?? fallback;
+  const answer = await text({
+    message: "Catalog directory to write (in your clone of claude-curated-config)",
+    placeholder: "~/code/claude-curated-config/packages/catalog",
+    ...(initial ? { initialValue: initial } : {}),
+    validate: (value) => (value?.trim() ? undefined : "required"),
+  });
+  if (isCancel(answer)) return null;
+  return resolve(answer.trim().replace(/^~(?=\/|$)/, homedir()));
 }
 
 /** Secrets the selection declares, with values taken from same-named environment variables. */

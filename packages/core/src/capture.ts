@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { writeFileAtomic } from "./fsutil";
@@ -21,8 +21,39 @@ export type CaptureKind = (typeof CAPTURE_KINDS)[number];
 export const PERSONAL_PROFILE_ID = "personal";
 export const PERSONAL_PROFILE_ORDER = 30;
 const MAX_FILE_BYTES = 1024 * 1024;
-/** Names never captured inside walked directories (VCS, dependencies, logs, locks, history). */
-const IGNORED_NAME = /^(\.git|node_modules|__pycache__|\.DS_Store)$|^history|\.log$|\.lock$/;
+/** How deep a captured directory is walked. */
+export const MAX_WALK_DEPTH = 8;
+/** Default per-item caps: an item over either one is skipped whole, with a reason. */
+export const DEFAULT_CAPTURE_LIMITS: CaptureLimits = { maxFiles: 500, maxBytes: 5 * 1024 * 1024 };
+/**
+ * Names never captured inside walked directories: VCS, dependencies, virtualenvs, build
+ * output, caches, logs, locks and history.
+ */
+const IGNORED_NAME =
+  /^(\.git|node_modules|__pycache__|\.DS_Store|\.venv|venv|dist|build|target|\.next|\.cache|coverage)$|^history|\.log$|\.lock$/;
+
+export interface CaptureLimits {
+  maxFiles: number;
+  maxBytes: number;
+}
+
+/** A path that was not captured, and why. */
+export interface CaptureSkip {
+  /** Path relative to the Claude dir (directories end with `/` when they are a whole item). */
+  path: string;
+  reason: string;
+}
+
+class ItemTooLarge extends Error {}
+
+function formatBytes(bytes: number): string {
+  const mb = 1024 * 1024;
+  return bytes % mb === 0 ? `${bytes / mb} MB` : `${bytes} bytes`;
+}
+
+function errorCode(error: unknown): string {
+  return (error as NodeJS.ErrnoException).code ?? (error as Error).message;
+}
 
 export interface CapturedFile {
   /** Path relative to the module directory. */
@@ -50,6 +81,8 @@ export interface CaptureResult {
   items: CaptureItem[];
   /** Every replaced secret (location and placeholder only, never the value). */
   redactions: Redaction[];
+  /** Paths left out (symlinked dirs, unreadable entries, oversized items), with reasons. */
+  skipped: CaptureSkip[];
   warnings: string[];
 }
 
@@ -58,6 +91,8 @@ export interface CaptureOptions {
   /** Path of `.claude.json` (user-scope MCP servers). */
   claudeJson: string;
   include?: CaptureKind[];
+  /** Per-item caps (default {@link DEFAULT_CAPTURE_LIMITS}). */
+  limits?: CaptureLimits;
 }
 
 /** Default `.claude.json`: `~/.claude.json` for `~/.claude`, else `<claudeDir>/.claude.json`. */
@@ -94,32 +129,6 @@ function moduleJson(item: CaptureItem): string {
   return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
-/** Lists regular files under `dir` (following symlinks), skipping ignored names. */
-function walk(dir: string, depth = 0): string[] {
-  if (depth > 8) return [];
-  const out: string[] = [];
-  for (const name of readdirSync(dir).sort()) {
-    if (IGNORED_NAME.test(name)) continue;
-    const full = join(dir, name);
-    let stat: ReturnType<typeof statSync>;
-    try {
-      stat = statSync(full);
-    } catch {
-      continue; // dangling symlink
-    }
-    if (stat.isDirectory()) out.push(...walk(full, depth + 1).map((rel) => join(name, rel)));
-    else if (stat.isFile()) out.push(name);
-  }
-  return out;
-}
-
-function listDir(dir: string, filter: (name: string) => boolean): string[] {
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((name) => !IGNORED_NAME.test(name) && filter(name))
-    .sort();
-}
-
 /**
  * Reads the Claude config and turns each item into a catalog module (in memory only).
  * Secrets in captured text and JSON are replaced with `${CCC_SECRET_*}` placeholders.
@@ -131,7 +140,84 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
   const items: CaptureItem[] = [];
   const redactions: Redaction[] = [];
   const warnings: string[] = [];
+  const skipped: CaptureSkip[] = [];
+  const limits = options.limits ?? DEFAULT_CAPTURE_LIMITS;
   const takenNames = new Set<string>();
+  const skip = (abs: string, reason: string, dir = false) =>
+    skipped.push({
+      path: `${relative(claudeDir, abs).split(sep).join("/")}${dir ? "/" : ""}`,
+      reason,
+    });
+
+  /** Directory entries (sorted, ignored names removed); an unreadable dir is skipped. */
+  const listDir = (dir: string, filter: (name: string) => boolean = () => true): string[] => {
+    if (!existsSync(dir)) return [];
+    try {
+      return readdirSync(dir)
+        .filter((name) => !IGNORED_NAME.test(name) && filter(name))
+        .sort();
+    } catch (error) {
+      skip(dir, `unreadable (${errorCode(error)})`);
+      return [];
+    }
+  };
+
+  /**
+   * Lists regular files under `root` (relative paths). Symlinked files are followed, symlinked
+   * directories are not (they are recorded as skipped), unreadable entries are skipped, and
+   * more than `limits` files or bytes throws {@link ItemTooLarge}.
+   */
+  const walk = (root: string): string[] => {
+    const out: string[] = [];
+    let bytes = 0;
+    const visit = (dir: string, rel: string, depth: number) => {
+      if (depth > MAX_WALK_DEPTH) {
+        skip(dir, `deeper than ${MAX_WALK_DEPTH} levels`);
+        return;
+      }
+      for (const name of listDir(dir)) {
+        const full = join(dir, name);
+        const relPath = rel ? join(rel, name) : name;
+        let stat: ReturnType<typeof statSync>;
+        try {
+          const link = lstatSync(full);
+          stat = link.isSymbolicLink() ? statSync(full) : link;
+          if (link.isSymbolicLink() && stat.isDirectory()) {
+            skip(full, "symlinked directory (not followed)");
+            continue;
+          }
+        } catch (error) {
+          skip(full, `unreadable (${errorCode(error)})`);
+          continue;
+        }
+        if (stat.isDirectory()) {
+          visit(full, relPath, depth + 1);
+        } else if (stat.isFile()) {
+          out.push(relPath);
+          bytes += stat.size;
+          if (out.length > limits.maxFiles) {
+            throw new ItemTooLarge(`more than ${limits.maxFiles} files`);
+          }
+          if (bytes > limits.maxBytes) {
+            throw new ItemTooLarge(`more than ${formatBytes(limits.maxBytes)} in total`);
+          }
+        }
+      }
+    };
+    visit(root, "", 0);
+    return out;
+  };
+
+  /** Walks an item's directory; an oversized item is skipped whole (null). */
+  const walkItem = (root: string): string[] | null => {
+    try {
+      return walk(root);
+    } catch (error) {
+      if (!(error instanceof ItemTooLarge)) throw error;
+      skip(root, error.message, true);
+      return null;
+    }
+  };
   const takenIds = new Set<string>();
 
   const uniqueId = (base: string) => {
@@ -143,13 +229,20 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
 
   /** Reads a file under the Claude dir and redacts it when it is text. */
   const readAsset = (redactor: Redactor, abs: string, path: string): CapturedFile | null => {
-    const stat = statSync(abs);
     const rel = relative(claudeDir, abs);
-    if (stat.size > MAX_FILE_BYTES) {
-      warnings.push(`${rel}: skipped, larger than 1 MiB`);
+    let stat: ReturnType<typeof statSync>;
+    let raw: Buffer;
+    try {
+      stat = statSync(abs);
+      if (stat.size > MAX_FILE_BYTES) {
+        skip(abs, "larger than 1 MiB");
+        return null;
+      }
+      raw = readFileSync(abs);
+    } catch (error) {
+      skip(abs, `unreadable (${errorCode(error)})`);
       return null;
     }
-    const raw = readFileSync(abs);
     const mode = stat.mode & 0o777;
     if (!isText(raw)) {
       warnings.push(`${rel}: binary file copied without a secret scan`);
@@ -276,26 +369,36 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
       kind: "skill",
       dir: "skills",
       label: "skill",
+      // A skill dir may itself be a symlink (e.g. into a dotfiles repo): the item root is
+      // followed once; symlinked directories inside it are not.
       list: (dir) =>
-        listDir(dir, (name) => statSafe(join(dir, name))?.isDirectory() ?? false).map((name) => ({
-          slug: name,
-          files: walk(join(dir, name)).map((rel) => ({ abs: join(dir, name, rel), path: rel })),
-          dest: `skills/${name}`,
-          source: `skills/${name}/`,
-        })),
+        listDir(dir, (name) => statSafe(join(dir, name))?.isDirectory() ?? false).flatMap(
+          (name) => {
+            const files = walkItem(join(dir, name));
+            if (!files) return [];
+            return [
+              {
+                slug: name,
+                files: files.map((rel) => ({ abs: join(dir, name, rel), path: rel })),
+                dest: `skills/${name}`,
+                source: `skills/${name}/`,
+              },
+            ];
+          },
+        ),
     },
     {
       kind: "agent",
       dir: "agents",
       label: "agent",
-      list: (dir) => mdFiles(dir, "agents"),
+      list: (dir) => mdFiles(listDir, dir, "agents"),
     },
     {
       kind: "command",
       dir: "commands",
       label: "command",
       list: (dir) =>
-        walk(dir)
+        (walkItem(dir) ?? [])
           .filter((rel) => rel.endsWith(".md"))
           .map((rel) => ({
             slug: rel.split(sep).join("-"),
@@ -308,7 +411,7 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
       kind: "output-style",
       dir: "output-styles",
       label: "output style",
-      list: (dir) => mdFiles(dir, "output-styles"),
+      list: (dir) => mdFiles(listDir, dir, "output-styles"),
     },
   ];
   for (const { kind, dir, label, list } of dirKinds) {
@@ -343,7 +446,7 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
       add(
         "mcp",
         `personal-mcp-${slug}`,
-        slug,
+        `mcp_${slug}`,
         {
           name: `Personal MCP server ${name}`,
           description: `Registers your user-scope MCP server "${name}" with the claude CLI.`,
@@ -375,7 +478,7 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
     }
   }
 
-  return { claudeDir, claudeJson, items, redactions, warnings };
+  return { claudeDir, claudeJson, items, redactions, skipped, warnings };
 }
 
 function statSafe(path: string) {
@@ -386,7 +489,11 @@ function statSafe(path: string) {
   }
 }
 
-function mdFiles(dir: string, destDir: string) {
+function mdFiles(
+  listDir: (dir: string, filter: (name: string) => boolean) => string[],
+  dir: string,
+  destDir: string,
+) {
   return listDir(
     dir,
     (name) => name.endsWith(".md") && (statSafe(join(dir, name))?.isFile() ?? false),
@@ -491,12 +598,13 @@ export function writeCapture(
     2,
   )}\n`;
   const current = readSafe(profilePath);
-  const profileAction: WriteAction = !current
+  let profileAction: WriteAction = !current
     ? "create"
     : current.toString("utf8") === profileText
       ? "unchanged"
       : "update";
-  if (!dryRun && profileAction !== "unchanged" && ids.length > 0) {
+  if (ids.length === 0) profileAction = "unchanged"; // nothing captured: no profile is written
+  if (!dryRun && profileAction !== "unchanged") {
     writeFileAtomic(profilePath, profileText);
   }
   return {
@@ -507,10 +615,13 @@ export function writeCapture(
   };
 }
 
-function walkAll(dir: string): string[] {
-  return readdirSync(dir, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => relative(dir, join(entry.parentPath, entry.name)));
+/** Every regular file under `dir`, relative to it (no symlinks followed). */
+function walkAll(dir: string, rel = ""): string[] {
+  return readdirSync(join(dir, rel), { withFileTypes: true }).flatMap((entry) => {
+    const path = rel ? join(rel, entry.name) : entry.name;
+    if (entry.isDirectory()) return walkAll(dir, path);
+    return entry.isFile() ? [path] : [];
+  });
 }
 
 function pruneEmptyDirs(dir: string): void {

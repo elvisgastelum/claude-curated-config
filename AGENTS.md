@@ -44,7 +44,7 @@ Rules:
 
 ### Secrets
 
-Modules may declare `secrets` (`CCC_SECRET_*` names). `ccc --cli plan --json` lists them under `secrets` with `provided`. `apply` reads each from the environment variable of the same name; if any is missing it exits `2` with `ccc.error/v1` code `secrets_missing` and `error.secrets: [{ name, description, module }]`, writing nothing. Ask the human to export the values (or run `ccc` in a terminal, which prompts with masked input). Never print, log or commit secret values.
+Modules may declare `secrets` (`CCC_SECRET_*` names). `ccc --cli plan --json` lists them under `secrets` with `provided`; `apply --dry-run` works without them (those steps are `planned` with message `needs secret <NAME>`). `apply` reads each from the environment variable of the same name; if any is missing it exits `2` with `ccc.error/v1` code `secrets_missing` and `error.secrets: [{ name, description, module }]`, writing nothing. Ask the human to export the values (or run `ccc` in a terminal, which prompts with masked input). Never print, log or commit secret values.
 
 ## Capture a machine's setup into the catalog
 
@@ -58,9 +58,9 @@ git -C <repo> diff --stat && git -C <repo> diff   # 3. review
 
 Rules:
 
-- Pass `--out <your clone>/packages/catalog` so the modules land in the git checkout you will commit from. Without `--out` they go to the catalog `ccc` is using (for the installed `ccc`, the installer's checkout).
+- Pass `--out <your clone>/packages/catalog` so the modules land in the git checkout you will commit from. Without `--out`, capture exits `2` (`ccc.error/v1` code `out_required`) when the catalog in use is the installer's checkout (`$CCC_HOME`, default `~/.local/share/claude-curated-config`) or is not inside a git checkout.
 - Before committing, show the human the `redactions` list (module, location, placeholder) and the `git diff`, and get their go-ahead. If you spot a secret that was not redacted, stop and tell them; do not commit it.
-- Output is `ccc.capture/v1`: `{ claudeDir, claudeJson, outDir, dryRun, items: [{ id, kind, source, action, files, secrets }], redactions: [{ module, location, placeholder }], warnings, profile: { id, path, action, modules } }`. It never contains secret values.
+- Output is `ccc.capture/v1`: `{ claudeDir, claudeJson, outDir, dryRun, items: [{ id, kind, source, action, files, secrets }], redactions: [{ module, location, placeholder }], skipped: [{ path, reason }], warnings, profile: { id, path, action, modules } }`. It never contains secret values.
 - Without `--yes` (and without `--dry-run`) a non-interactive capture exits `2` (`confirmation_required`).
 
 ### Exit codes
@@ -80,7 +80,7 @@ Every document has a `schema` field.
 - `ccc.list/v1`: `{ catalogDir, modules: [{ id, name, description, tags, requires, steps }], profiles: [{ id, name, description, order?, modules }] }`. Profiles are sorted by `order` (lower first), then id.
 - `ccc.plan/v1`: `{ claudeDir, selection, summary: { create, update, unchanged, run, skip }, modules: [{ id, name, steps: [{ index, type, action, reason, summary, dest?, command?, blocked }] }], conflicts: [{ module, step, dest, path, current, catalog, resolution? }] }`. Modules are in apply order (required modules first).
 - `ccc.apply/v1`: `{ claudeDir, selection, dryRun, ok, backupDir, summary: { done, unchanged, skipped, failed, planned }, modules: [{ id, name, ok, steps: [{ index, type, action, status, message, dest?, command?, backup? }] }] }`.
-- `ccc.status/v1`: `{ claudeDir, modules: [{ id, name, state: "applied" | "partial" | "not-applied", satisfied, pending, skipped }] }`.
+- `ccc.status/v1`: `{ claudeDir, modules: [{ id, name, state: "applied" | "partial" | "not-applied" | "conflicts" | "needs-secrets", satisfied, pending, skipped, conflicts, missingSecrets }] }`. `conflicts`: only undecided settings conflicts differ (pass the same `--resolve`/`--on-conflict` as for `apply`); `needs-secrets`: export the `missingSecrets` env vars to check it. Nothing is remembered between runs.
 - `ccc.error/v1`: `{ error: { code, message, ...details }, exitCode }`. `conflicts_unresolved` adds `error.conflicts` (the plan conflicts plus `flags: { catalog, keep }`).
 
 Plan actions: `create` (new file), `update` (existing file changes, backed up first), `unchanged`, `run` (a command will run), `skip` (e.g. a required binary is missing; `blocked: true` means it cannot be applied and `apply`, including `--dry-run`, reports it as `failed`). A failed step never aborts the run: later steps of the same module and modules that require it are `skipped` with a message naming the failure, other modules still apply, and the full report is printed.

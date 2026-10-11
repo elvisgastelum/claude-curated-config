@@ -28,6 +28,11 @@ export class UsageError extends Error {
 
 export type Colors = ReturnType<typeof pc.createColors>;
 
+/** Cuts `text` to at most `max` characters, ending with `…` when cut. */
+export function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
 export function makeColors(enabled: boolean): Colors {
   return pc.createColors(enabled && pc.isColorSupported);
 }
@@ -169,10 +174,7 @@ export function renderPlan(plan: Plan, c: Colors): string {
   if (plan.conflicts.length > 0) {
     lines.push("", c.yellow(c.bold(`Conflicts (${plan.conflicts.length})`)));
     for (const conflict of plan.conflicts) {
-      const value = (v: unknown) => {
-        const text = JSON.stringify(v) ?? "undefined";
-        return text.length > 40 ? `${text.slice(0, 39)}…` : text;
-      };
+      const value = (v: unknown) => truncate(JSON.stringify(v) ?? "undefined", 40);
       const decided = conflict.resolution ? c.dim(` -> ${conflict.resolution}`) : "";
       lines.push(
         `  ${conflict.dest} ${conflict.path} ${c.dim(`(${conflict.module})`)}: ${value(conflict.current)} vs catalog ${value(conflict.catalog)}${decided}`,
@@ -204,12 +206,22 @@ export function renderApply(result: ApplyResult, c: Colors): string {
 }
 
 export function renderStatus(report: StatusReport, c: Colors): string {
-  const icon = { applied: c.green("●"), partial: c.yellow("◐"), "not-applied": c.dim("○") };
+  const icon = {
+    applied: c.green("●"),
+    partial: c.yellow("◐"),
+    "not-applied": c.dim("○"),
+    conflicts: c.yellow("!"),
+    "needs-secrets": c.magenta("?"),
+  };
+  const detail = (m: StatusReport["modules"][number]) => {
+    if (m.state === "needs-secrets") return `set ${m.missingSecrets.join(", ")}`;
+    const steps = `${m.satisfied}/${m.satisfied + m.pending + m.conflicts} steps`;
+    return m.conflicts > 0 ? `${steps}, decide with --resolve or --on-conflict` : steps;
+  };
   return [
     `Claude dir: ${report.claudeDir}`,
     ...report.modules.map(
-      (m) =>
-        `${icon[m.state]} ${m.id.padEnd(24)} ${m.state} ${c.dim(`(${m.satisfied}/${m.satisfied + m.pending} steps)`)}`,
+      (m) => `${icon[m.state]} ${m.id.padEnd(24)} ${m.state} ${c.dim(`(${detail(m)})`)}`,
     ),
   ].join("\n");
 }

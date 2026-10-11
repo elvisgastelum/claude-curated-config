@@ -12,7 +12,14 @@ import {
 } from "./fsutil";
 import { changedPaths, deepMerge, findConflicts } from "./merge";
 import { resolveDest, resolveInside } from "./paths";
-import { maskJson, maskValues, type SecretSpec, substitute, substituteJson } from "./secrets";
+import {
+  MissingSecretError,
+  maskJson,
+  maskValues,
+  type SecretSpec,
+  substitute,
+  substituteJson,
+} from "./secrets";
 import type {
   ApplyResult,
   Catalog,
@@ -20,6 +27,7 @@ import type {
   Conflict,
   ConflictPolicy,
   ModuleResult,
+  ModuleState,
   ModuleStatus,
   Plan,
   PlanAction,
@@ -40,6 +48,10 @@ interface Evaluation {
   reason: string;
   summary: string;
   blocked?: boolean;
+  /** Set when the step is blocked only because this secret has no value. */
+  needsSecret?: string;
+  /** json-merge: every difference from the current file is an undecided conflict. */
+  onlyConflicts?: boolean;
   destPath?: string;
   /** Where content is written when it differs from `destPath` (a json-merge through a symlink). */
   writePath?: string;
@@ -230,6 +242,17 @@ function evaluateJsonMerge(
     return { action: "unchanged", reason: "all keys already present", summary: "", destPath };
   }
   const open = conflicts.filter((c) => !c.resolution).length;
+  // Would keeping every undecided conflict leave the file as it is?
+  const onlyConflicts =
+    open > 0 &&
+    changedPaths(
+      existing,
+      deepMerge(
+        existing,
+        src,
+        new Set(conflicts.filter((c) => c.resolution !== "catalog").map((c) => c.path)),
+      ),
+    ).length === 0;
   return {
     action: exists ? "update" : "create",
     reason: exists ? "merge new keys" : "file does not exist",
@@ -240,6 +263,7 @@ function evaluateJsonMerge(
     writePath,
     content,
     ...(conflicts.length ? { conflicts } : {}),
+    ...(onlyConflicts ? { onlyConflicts } : {}),
   };
 }
 
@@ -275,6 +299,15 @@ function evaluate(step: Step, mod: CatalogModule, ctx: EvalContext): Evaluation 
     }
   } catch (error) {
     // One unreadable file or missing secret must not abort the whole plan: the step is blocked.
+    if (error instanceof MissingSecretError) {
+      return {
+        action: "skip",
+        reason: error.message,
+        summary: `needs secret ${error.secret}`,
+        blocked: true,
+        needsSecret: error.secret,
+      };
+    }
     return {
       action: "skip",
       reason: maskValues((error as Error).message, ctx.secrets),
@@ -316,6 +349,7 @@ function planModule(
       if (step.type === "command") planned.command = step.run;
       else planned.dest = step.dest;
       if (evaluation.blocked) planned.blocked = true;
+      if (evaluation.needsSecret) planned.needsSecret = evaluation.needsSecret;
       return planned;
     }),
   };
@@ -423,6 +457,10 @@ export function startApply(planToApply: Plan, options: ApplyOptions = {}): Apply
       message: maskValues(message, secrets),
     });
     if (evaluation.action === "skip") {
+      // A dry run does not need secret values: the step is planned and marked.
+      if (dryRun && evaluation.needsSecret) {
+        return result("planned", `needs secret ${evaluation.needsSecret}`);
+      }
       return result(evaluation.blocked ? "failed" : "skipped", evaluation.reason);
     }
     if (evaluation.action === "unchanged") return result("unchanged", evaluation.reason);
@@ -510,20 +548,61 @@ export interface StatusOptions {
   catalog: Catalog;
   claudeDir: string;
   env?: NodeJS.ProcessEnv;
+  /** Values for `${CCC_SECRET_*}` placeholders (as for {@link plan}). */
+  secrets?: Record<string, string>;
+  /** Conflict decisions keyed `<module>:<JSON pointer>` (as for {@link plan}). */
+  resolutions?: Resolutions;
+  /** Policy for conflicts without an explicit decision (default "ask"). */
+  onConflict?: ConflictPolicy;
 }
 
-/** Reports, for every catalog module, whether its steps are already satisfied. */
+/**
+ * Reports, for every catalog module, whether its steps are already satisfied. Decisions and
+ * secret values are inputs only; nothing is remembered between runs.
+ *
+ * - `needs-secrets`: the module declares secrets without values, so it cannot be evaluated.
+ * - `conflicts`: nothing is pending except undecided json-merge conflicts.
+ */
 export function status(options: StatusOptions): StatusReport {
   const claudeDir = resolve(options.claudeDir);
   const env = options.env ?? process.env;
+  const secrets = options.secrets ?? {};
+  const ctx: EvalContext = {
+    claudeDir,
+    env,
+    decide: decider(options.resolutions, options.onConflict),
+    secrets,
+  };
   const modules: ModuleStatus[] = options.catalog.modules.map((mod) => {
-    const planned = planModule(mod, { claudeDir, env, decide: decider(), secrets: {} });
-    const count = (pred: (s: PlannedStep) => boolean) => planned.steps.filter(pred).length;
-    const satisfied = count((s) => s.action === "unchanged");
-    const skipped = count((s) => s.action === "skip" && !s.blocked);
-    const pending = planned.steps.length - satisfied - skipped;
-    const state = pending === 0 ? "applied" : satisfied > 0 ? "partial" : "not-applied";
-    return { id: mod.id, name: mod.name, state, satisfied, pending, skipped };
+    const missingSecrets = (mod.secrets ?? [])
+      .map((secret) => secret.name)
+      .filter((name) => secrets[name] === undefined);
+    const evaluations = mod.steps.map((step) => evaluate(step, mod, ctx));
+    const count = (pred: (e: Evaluation) => boolean) => evaluations.filter(pred).length;
+    const satisfied = count((e) => e.action === "unchanged");
+    const skipped = count((e) => e.action === "skip" && !e.blocked);
+    const conflicts = count((e) => e.onlyConflicts === true);
+    const pending = evaluations.length - satisfied - skipped - conflicts;
+    const state: ModuleState =
+      missingSecrets.length > 0
+        ? "needs-secrets"
+        : pending === 0 && conflicts > 0
+          ? "conflicts"
+          : pending === 0
+            ? "applied"
+            : satisfied > 0
+              ? "partial"
+              : "not-applied";
+    return {
+      id: mod.id,
+      name: mod.name,
+      state,
+      satisfied,
+      pending,
+      skipped,
+      conflicts,
+      missingSecrets,
+    };
   });
   return { claudeDir, modules };
 }
