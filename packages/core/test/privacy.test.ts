@@ -28,9 +28,16 @@ describe("findPrivate", () => {
       "example-private.com",
       "a.b.EXAMPLE-PRIVATE.com",
     ]);
-    expect(spans("ssh box.tail1234.ts.net; printer at nas.local.")).toEqual([
+    expect(spans("ssh box.tail1234.ts.net; printer at http://nas.local.")).toEqual([
       "box.tail1234.ts.net",
       "nas.local",
+    ]);
+    // .local hosts only in a URL/host context: scheme, user@, or :port.
+    expect(spans("http://nas.local/x me@pi.local nas.local:8080 a.b.local:22")).toEqual([
+      "nas.local",
+      "pi.local",
+      "nas.local",
+      "a.b.local",
     ]);
     expect(spans("10.0.0.5 172.16.4.2 172.31.255.1 192.168.1.20 100.64.0.1 100.127.9.9")).toEqual([
       "10.0.0.5",
@@ -49,6 +56,9 @@ describe("findPrivate", () => {
       ),
     ).toEqual([]);
     expect(spans("settings.local.json .env.local not-example-private.com.evil.org")).toEqual([]);
+    // Bare .local names are file names more often than hosts.
+    expect(spans("edit foo.local and config.prod.local, see notes.local.")).toEqual([]);
+    expect(spans("cp foo.local /tmp/foo.local; path=dir/foo.local")).toEqual([]);
     expect(spans("myexample-private.com example-private.community")).toEqual([]);
     expect(spans("svc.example-private.com", [])).toEqual([]);
   });
@@ -98,7 +108,7 @@ describe("capture privacy scan", () => {
     mkdirSync(claudeDir, { recursive: true });
     writeFileSync(
       join(claudeDir, "CLAUDE.md"),
-      "# Me\n- deploy to svc.example-private.com (10.1.2.3)\n- NAS: nas.local\n",
+      "# Me\n- deploy to svc.example-private.com (10.1.2.3)\n- NAS: http://nas.local\n",
     );
     writeFileSync(
       claudeJson,

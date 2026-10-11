@@ -140,14 +140,16 @@ function escapeDomain(domain: string): string {
 
 /**
  * Finds private infrastructure details: host names under `domains` (and the domains
- * themselves), `*.ts.net` (Tailscale) and `*.local` (mDNS) hosts, and private IPv4
- * addresses (10/8, 172.16/12, 192.168/16, 100.64/10 CGNAT/Tailscale).
+ * themselves), `*.ts.net` (Tailscale) hosts, `*.local` (mDNS) hosts in a URL/host context
+ * (`scheme://`, `user@`, `:port`), and private IPv4 addresses (10/8, 172.16/12, 192.168/16, 100.64/10 CGNAT/Tailscale).
  */
 export function findPrivate(text: string, domains: readonly string[]): Span[] {
   const hostSuffixes = [
     ...domains.map((domain) => `(?:${LABEL}\\.)*${escapeDomain(domain)}`),
     `(?:${LABEL}\\.)+ts\\.net`,
-    `(?:${LABEL}\\.)+local`,
+    // mDNS names look like file names (`foo.local`): only after a scheme or `user@`, or
+    // before a `:port`.
+    `(?:(?<=://|@)(?:${LABEL}\\.)+local|(?:${LABEL}\\.)+local(?=:\\d))`,
   ];
   const hosts = new RegExp(`${HOST_START}(?:${hostSuffixes.join("|")})${HOST_END}`, "gi");
   const spans: Span[] = [];
