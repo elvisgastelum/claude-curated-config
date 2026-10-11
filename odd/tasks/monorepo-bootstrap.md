@@ -44,6 +44,9 @@ Strategy: `single-pr` (user decision 2026-10-11). Create public repo elvisgastel
 | T8 | json-merge conflict detection: TUI asks per conflict; `--cli` fails exit 2 listing conflicts unless `--on-conflict catalog\|keep` or `--resolve <module>:<json.path>=catalog\|keep` | delegated | [x] | e8a257a |
 | T9 | `ccc capture`: import current ~/.claude into catalog modules + `personal` profile; secrets redacted to `${VAR}` placeholders filled at apply (TUI prompt / env in agent mode) | delegated | [x] | 5de5a65 |
 | T10 | Review 2 fixes on PR #1: broader secret detection (`*_KEY`, `DATABASE_URL`, hex, URL credentials, MCP argv), status honors secrets/keep, bounded+tolerant capture walk, Node >= 20.12 floor, capture requires `--out` when running from the installer checkout, small R2 cleanups | delegated | [x] | 9e0b420 |
+| T11 | Engine: command steps gain `os` filter, `env` (with secret placeholders), `shell` convenience; modules gain `provides` (claudeDir globs, settings JSON pointers, CLAUDE.md block markers, MCP server names); capture skips anything a non-personal catalog module provides, plus `skills/synced` and `homelab-service-manager`, and strips installer-managed CLAUDE.md blocks | delegated | [ ] | |
+| T12 | Catalog: installer modules (claude-commit-skill, kaneo-work-tracking-skill, claude-continue-skill, claude-statusline, configure-env, herdr + herdr-config) and tool modules (gentle-ai, engram, codegraph: install if missing on macOS+Linux, then each tool's Claude setup); `personal` profile skeleton; doctor prerequisites (curl, jq, bash, brew/npm) | delegated | [ ] | |
+| T13 | Re-run real capture dry-run, show the user, write leftover personal modules (settings + personal CLAUDE.md sections) only after approval | parent | [ ] | |
 
 Route evidence: empty repo, 5 tasks across many non-trivial files → one bounded writer (mandatory writer trigger).
 
@@ -102,5 +105,10 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 - Parent spot check: `pnpm test` → 81/81. Native review high → standing consent, four lenses, **approved**, acknowledged (lineage review-a0e1319ecfe8e68a). Two whole-branch START attempts from the stop hook ended `lens_context_budget_exceeded` (no authority created); the branch is covered by the three slice reviews.
 - Advisory follow-ups: markdown key-name redaction narrower than before (`auth:`, `cookie:`, `session:`, `database_url:` lines in .md not redacted); `*Key`/`key` suffix false positives (hotKey, sortKey); dry-run without secrets hides conflicts; install.sh vs doctor node-floor fallbacks differ; misleading markdown test name; TUI out-dir unguarded.
 
+## Capture dry-run on real config (2026-10-11)
+- 62 items, 16 redactions, all false positives inside `skills/synced/` (Claude-managed docx/pptx/xlsx scripts); no secrets in MCP servers or settings.
+- Gaps found: `hooks/` not captured; hooks depend on gentle-ai, codegraph, engram, herdr; absolute paths (statusline, engram).
+- User decisions: exclude `skills/synced`; gentle-ai-managed items installed via gentle-ai; use the user's own repo installers instead of snapshots (commit, kaneo, continue, statusline, configure-env, herdr + herdr-config); tools install-if-missing; macOS + Linux; profiles minimal/full/personal; exclude homelab-service-manager (public repo).
+
 ## Next step
-Push T10 to PR #1. Run `ccc capture --dry-run` on the real ~/.claude and show items + redactions; manually check markdown items for unredacted `auth`/`cookie`/`session`/URL credentials before any write.
+Writer implements T11 + T12 (no real installer runs, no real ~/.claude writes). Then parent runs the T13 capture dry-run and asks the user before writing.
