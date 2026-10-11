@@ -36,8 +36,8 @@ Strategy: `ask-on-risk`. Forecast ~1500 authored lines (exceeds 400 → chain st
 |----|------|-------|--------|--------|
 | T1 | Workspace scaffold (root package.json, pnpm-workspace, tsconfig, biome, vitest) | delegated (writer trigger: 2+ files) | [x] | 1ddf457 |
 | T2 | Core engine + unit tests | delegated | [x] | a81a65a |
-| T3 | Seed catalog modules + profiles | delegated | [x] | (see T4 commit) |
-| T4 | CLI: commander `--cli` + JSON + clack TUI + integration test | delegated | [ ] | |
+| T3 | Seed catalog modules + profiles | delegated | [x] | 310b190 |
+| T4 | CLI: commander `--cli` + JSON + clack TUI + integration test | delegated | [x] | (see T5 commit) |
 | T5 | install.sh, README, AGENTS.md, CLAUDE.md | delegated | [ ] | |
 
 Route evidence: empty repo, 5 tasks across many non-trivial files → one bounded writer (mandatory writer trigger).
@@ -47,6 +47,7 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 - T1: root scaffold. Pinned: typescript 7.0.2, tsup 8.5.1, vitest 5.0.3, @biomejs/biome 2.5.15, @types/node 22.20.5. `pnpm install` needed `allowBuilds: { esbuild: true }` in pnpm-workspace.yaml (pnpm 12 fails on ignored build scripts). `pnpm lint`: ok (4 files). `pnpm build`/`pnpm typecheck`: ok (no packages yet). Test-first exception: scaffold has no behavior.
 - T2: core engine. RED observed (22/22 failing against empty index), then GREEN 22/22 (`vitest run --project core`). Covers merge semantics, idempotency, backups, symlinks, dry-run, path-escape rejection, requires ordering + cycles, command check/requiresBin skip with a fake PATH bin, status, doctor. `pnpm typecheck` ok, `pnpm lint` ok. Decisions: scalars from the catalog win in json-merge; backup timestamp replaces `:` with `-` (portable file names); apply re-evaluates each step against disk state; a step that cannot be applied (invalid existing JSON, dest is a directory) is planned as `skip` with `blocked: true` and fails on apply (exit 1).
 - T3: seed catalog (core-settings, global-instructions, skill-commit, mcp-context7; profiles minimal/full) + README. RED observed (4/4 failing with an empty catalog), GREEN 4/4: the catalog test loads the real catalog through core, checks profiles, plans `full` against an empty dir (mcp-context7 = skip without `claude` on PATH), and validates the skill frontmatter. Full suite 26/26, typecheck and lint ok.
+- T4: CLI (commander 14.0.3, @clack/prompts 1.8.1, picocolors 1.1.1; tsup bundles core, catalog external, shebang banner). RED observed (11/11 failing against a stub bin), GREEN 11/11 integration tests running `node dist/index.js` with piped stdio and a PATH without the real `claude` (version, list, no-subcommand help/JSON, plan shape, apply minimal + idempotent, dry-run, non-TTY apply without --yes = exit 2 ccc.error/v1, unknown module = exit 3, usage errors = exit 2, status/doctor, command step via a fake `claude`). Full suite 37/37. TUI smoke-tested in a pseudo-TTY (`script`) against a temp dir: profile pick, plan note, confirm, per-module spinner, outro; Ctrl+C at the first prompt exits 130. Deviation: commander 15 requires Node >= 22.12, so 14.0.3 (Node >= 20) is pinned.
 
 ## Next step
 Writer implements T1–T5 with one work-unit commit each.
