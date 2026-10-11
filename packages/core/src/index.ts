@@ -50,14 +50,17 @@ export { changedPaths, deepMerge, findConflicts, pointerJoin } from "./merge";
 export { claudeJsonFor, resolveClaudeDir, resolveDest, resolveInside } from "./paths";
 export type { ProvidedEntry, ProvidedIndex } from "./provides";
 export { collectProvided, PROVIDES_KINDS } from "./provides";
-export type { Redaction, SecretSpec } from "./secrets";
+export type { Redaction, RedactorOptions, SecretSpec } from "./secrets";
 export {
+  DEFAULT_PRIVATE_DOMAINS,
+  findPrivate,
   findSecrets,
   isSecretKey,
   isSecretName,
   MissingSecretError,
   maskJson,
   maskValues,
+  privateDomainsFromEnv,
   SECRET_KEY,
   substitute,
 } from "./secrets";

@@ -24,6 +24,7 @@ import {
   defaultClaudeJson,
   loadCatalog,
   type ProvidedIndex,
+  privateDomainsFromEnv,
   type Redaction,
   requiredSecrets,
   type Selection,
@@ -121,8 +122,10 @@ export function captureDoc(capture: CaptureResult, written: CaptureWriteResult) 
       action: actions.get(item.id) ?? "unchanged",
       files: item.files.map((f) => f.path),
       secrets: item.secrets.map((s) => s.name),
+      inputs: item.inputs.map((s) => s.name),
     })),
     redactions: capture.redactions,
+    privacy: capture.privacy,
     skipped: capture.skipped,
     warnings: capture.warnings,
     profile: written.profile,
@@ -136,6 +139,13 @@ export function renderRedactions(redactions: Redaction[], c: Colors): string {
     .join("\n");
 }
 
+export function renderPrivacy(privacy: Redaction[], c: Colors): string {
+  if (privacy.length === 0) return "No private hosts or addresses found.";
+  return privacy
+    .map((r) => `${r.module} ${c.dim(r.location)} -> ${c.cyan(r.placeholder)}`)
+    .join("\n");
+}
+
 export function renderSkipped(capture: CaptureResult, c: Colors): string {
   return capture.skipped.map((s) => `${s.path} ${c.dim(s.reason)}`).join("\n");
 }
@@ -146,6 +156,11 @@ function renderCapture(capture: CaptureResult, written: CaptureWriteResult, c: C
   );
   lines.push(`  ${written.profile.action.padEnd(9)} profiles/${written.profile.id}.json`);
   lines.push("", c.bold("Redacted secrets"), renderRedactions(capture.redactions, c));
+  lines.push(
+    "",
+    c.bold("Private infrastructure (inputs asked at apply)"),
+    renderPrivacy(capture.privacy, c),
+  );
   if (capture.skipped.length > 0) lines.push("", c.bold("Skipped"), renderSkipped(capture, c));
   for (const warning of capture.warnings) lines.push(c.yellow(`warning: ${warning}`));
   lines.push(
@@ -207,6 +222,7 @@ function runCapture(
     claudeJson: options.claudeJson,
     include: options.include,
     provided,
+    privateDomains: privateDomainsFromEnv(process.env),
   });
   capture.warnings.unshift(...warnings);
   return capture;
@@ -276,8 +292,12 @@ async function captureTui(
     ...capture,
     items: capture.items.filter((item) => keep.has(item.id)),
     redactions: capture.redactions.filter((r) => keep.has(r.module)),
+    privacy: capture.privacy.filter((r) => keep.has(r.module)),
   };
   note(renderRedactions(selected.redactions, c), "Secrets replaced with placeholders");
+  if (selected.privacy.length > 0) {
+    note(renderPrivacy(selected.privacy, c), "Private hosts and addresses replaced with inputs");
+  }
   if (selected.skipped.length > 0) note(renderSkipped(selected, c), "Not captured");
   for (const warning of selected.warnings) log.warn(warning);
   const outDir = options.out ? resolve(options.out) : await askOutDir(ctx);

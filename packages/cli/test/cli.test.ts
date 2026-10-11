@@ -528,6 +528,37 @@ describe("ccc --cli", () => {
     expect(readFileSync(log, "utf8")).toBe("https://svc.example.test\n");
   });
 
+  it("flags private infrastructure in capture output using CCC_PRIVATE_DOMAINS", () => {
+    const home = temp();
+    const claudeDir = join(home, ".claude");
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(join(claudeDir, "CLAUDE.md"), "# Me\n- API at api.example-private.com\n");
+    writeFileSync(
+      join(home, ".claude.json"),
+      JSON.stringify({ mcpServers: { svc: { type: "http", url: "http://192.168.7.7:8080/mcp" } } }),
+    );
+    const out = join(temp(), "catalog");
+    const run = ccc(
+      ["--cli", "capture", "--json", "--claude-dir", claudeDir, "--out", out, "--yes"],
+      { HOME: home, CCC_PRIVATE_DOMAINS: "example-private.com" },
+    );
+    expect(run.code).toBe(0);
+    expect(run.stdout).not.toMatch(/example-private|192\.168\.7\.7/);
+    const doc = run.json();
+    const privacy = doc.privacy as { module: string; location: string; placeholder: string }[];
+    expect(privacy.map((p) => p.module).sort()).toEqual(["personal-claude-md", "personal-mcp-svc"]);
+    const items = doc.items as { id: string; inputs: string[] }[];
+    expect(items.find((i) => i.id === "personal-mcp-svc")?.inputs).toEqual([
+      "CCC_INPUT_MCP_SVC_URL",
+    ]);
+    const files = readdirSync(out, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => readFileSync(join(entry.parentPath, entry.name), "utf8"))
+      .join("\n");
+    expect(files).not.toMatch(/example-private|192\.168\.7\.7/);
+    expect(files).toContain("CCC_INPUT_");
+  });
+
   it("rejects an unknown capture kind with exit 2", () => {
     const run = ccc(["--cli", "capture", "--include", "nope", "--dry-run", "--json"]);
     expect(run.code).toBe(2);

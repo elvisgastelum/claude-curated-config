@@ -18,7 +18,7 @@ import {
   pathProvider,
   settingProvider,
 } from "./provides";
-import { type Redaction, Redactor, type SecretSpec } from "./secrets";
+import { DEFAULT_PRIVATE_DOMAINS, type Redaction, Redactor, type SecretSpec } from "./secrets";
 import type { Step } from "./types";
 
 export const CAPTURE_KINDS = [
@@ -97,6 +97,8 @@ export interface CaptureItem {
   files: CapturedFile[];
   steps: Step[];
   secrets: SecretSpec[];
+  /** Non-secret inputs for the `${CCC_INPUT_*}` placeholders of the privacy scan. */
+  inputs: SecretSpec[];
 }
 
 export interface CaptureResult {
@@ -105,6 +107,11 @@ export interface CaptureResult {
   items: CaptureItem[];
   /** Every replaced secret (location and placeholder only, never the value). */
   redactions: Redaction[];
+  /**
+   * Private infrastructure details replaced with `${CCC_INPUT_*}` placeholders (location and
+   * placeholder only, never the value).
+   */
+  privacy: Redaction[];
   /** Paths left out (symlinked dirs, unreadable entries, oversized items), with reasons. */
   skipped: CaptureSkip[];
   warnings: string[];
@@ -124,6 +131,11 @@ export interface CaptureOptions {
   provided?: ProvidedIndex;
   /** Paths never captured (default {@link CAPTURE_IGNORE}). */
   ignore?: readonly string[];
+  /**
+   * Domains whose host names are private infrastructure (default
+   * {@link DEFAULT_PRIVATE_DOMAINS}; see `privateDomainsFromEnv` for `CCC_PRIVATE_DOMAINS`).
+   */
+  privateDomains?: readonly string[];
 }
 
 /** Removes the value at a JSON pointer (object keys only); returns whether it existed. */
@@ -207,6 +219,7 @@ function moduleJson(item: CaptureItem): string {
     description: item.description,
     tags: ["personal", item.kind],
     ...(item.secrets.length > 0 ? { secrets: item.secrets } : {}),
+    ...(item.inputs.length > 0 ? { inputs: item.inputs } : {}),
     steps: item.steps,
   };
   return `${JSON.stringify(doc, null, 2)}\n`;
@@ -222,6 +235,8 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
   const wanted = new Set<CaptureKind>(options.include?.length ? options.include : CAPTURE_KINDS);
   const items: CaptureItem[] = [];
   const redactions: Redaction[] = [];
+  const privacy: Redaction[] = [];
+  const privateDomains = options.privateDomains ?? DEFAULT_PRIVATE_DOMAINS;
   const warnings: string[] = [];
   const skipped: CaptureSkip[] = [];
   const limits = options.limits ?? DEFAULT_CAPTURE_LIMITS;
@@ -349,11 +364,12 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
     build: (redactor: Redactor) => { files: CapturedFile[]; steps: Step[] } | null,
   ) => {
     const id = uniqueId(idBase);
-    const redactor = new Redactor(id, prefix, takenNames);
+    const redactor = new Redactor(id, prefix, takenNames, { privateDomains });
     const built = build(redactor);
     if (!built || built.steps.length === 0) return;
     redactions.push(...redactor.redactions);
-    items.push({ id, kind, ...meta, ...built, secrets: redactor.secrets });
+    privacy.push(...redactor.privacy);
+    items.push({ id, kind, ...meta, ...built, secrets: redactor.secrets, inputs: redactor.inputs });
   };
 
   /** A module made of files copied to `<destDir>/<path>`. */
@@ -633,7 +649,7 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
     }
   }
 
-  return { claudeDir, claudeJson, items, redactions, skipped, warnings };
+  return { claudeDir, claudeJson, items, redactions, privacy, skipped, warnings };
 }
 
 /**

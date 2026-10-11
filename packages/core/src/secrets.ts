@@ -110,19 +110,91 @@ export function findSecrets(text: string): Span[] {
   return spans.sort((a, b) => a.start - b.start);
 }
 
+/** Domains whose host names capture treats as private infrastructure by default. */
+export const DEFAULT_PRIVATE_DOMAINS: readonly string[] = ["elvisgastelum.com"];
+
+/**
+ * Private domains from `CCC_PRIVATE_DOMAINS` (comma-separated; empty means none), else
+ * {@link DEFAULT_PRIVATE_DOMAINS}.
+ */
+export function privateDomainsFromEnv(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = env.CCC_PRIVATE_DOMAINS;
+  if (raw === undefined) return [...DEFAULT_PRIVATE_DOMAINS];
+  return raw
+    .split(",")
+    .map((domain) => domain.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+const LABEL = "[a-z0-9](?:[a-z0-9-]*[a-z0-9])?";
+/** Not preceded by a host character, so `.env.local` or `my-host.local` parts never match alone. */
+const HOST_START = "(?<![\\w.-])";
+/** Not followed by more host characters (`settings.local.json`, `x.example.community`). */
+const HOST_END = "(?![\\w-]|\\.[a-z0-9])";
+const PRIVATE_IPV4 =
+  /(?<![\w.])(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])(?:\.\d{1,3}){2})(?![\w]|\.\d)/g;
+
+function escapeDomain(domain: string): string {
+  return domain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Finds private infrastructure details: host names under `domains` (and the domains
+ * themselves), `*.ts.net` (Tailscale) and `*.local` (mDNS) hosts, and private IPv4
+ * addresses (10/8, 172.16/12, 192.168/16, 100.64/10 CGNAT/Tailscale).
+ */
+export function findPrivate(text: string, domains: readonly string[]): Span[] {
+  const hostSuffixes = [
+    ...domains.map((domain) => `(?:${LABEL}\\.)*${escapeDomain(domain)}`),
+    `(?:${LABEL}\\.)+ts\\.net`,
+    `(?:${LABEL}\\.)+local`,
+  ];
+  const hosts = new RegExp(`${HOST_START}(?:${hostSuffixes.join("|")})${HOST_END}`, "gi");
+  const spans: Span[] = [];
+  const add = (start: number, end: number) => {
+    if (!spans.some((s) => start < s.end && end > s.start)) spans.push({ start, end });
+  };
+  for (const match of text.matchAll(hosts)) add(match.index, match.index + match[0].length);
+  for (const match of text.matchAll(PRIVATE_IPV4)) {
+    if (match[0].split(".").every((octet) => Number(octet) <= 255)) {
+      add(match.index, match.index + match[0].length);
+    }
+  }
+  return spans.sort((a, b) => a.start - b.start);
+}
+
 /** True when a value only refers to environment variables (`${VAR}`, `$VAR`) and is not a literal. */
 function isEnvReference(value: string): boolean {
   return /\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/.test(value) && findSecrets(value).length === 0;
 }
 
+function nameBody(parts: string[]): string {
+  return (
+    parts
+      .join("_")
+      .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "VALUE"
+  );
+}
+
 export function toSecretName(...parts: string[]): string {
-  const body = parts
-    .join("_")
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return `CCC_SECRET_${body || "VALUE"}`;
+  return `CCC_SECRET_${nameBody(parts)}`;
+}
+
+export function toInputName(...parts: string[]): string {
+  return `CCC_INPUT_${nameBody(parts)}`;
+}
+
+export interface RedactorOptions {
+  /** Domains whose host names are private infrastructure (see {@link findPrivate}). */
+  privateDomains?: readonly string[];
+}
+
+/** `HOST` for a host name, `ADDRESS` for an IP address. */
+function privateHint(value: string): string {
+  return /^[\d.]+$/.test(value) ? "ADDRESS" : "HOST";
 }
 
 export interface Redaction {
@@ -139,41 +211,72 @@ export interface SecretSpec {
 
 /**
  * Replaces secrets with `${CCC_SECRET_*}` placeholders for one module and records each
- * redaction (never the value). The same value always maps to the same placeholder.
+ * redaction (never the value). Private infrastructure details (see {@link findPrivate})
+ * become `${CCC_INPUT_*}` placeholders, declared as non-secret inputs and recorded under
+ * `privacy`. The same value always maps to the same placeholder.
  */
 export class Redactor {
   readonly redactions: Redaction[] = [];
   readonly secrets: SecretSpec[] = [];
+  /** Private infrastructure values replaced (location and placeholder only). */
+  readonly privacy: Redaction[] = [];
+  /** Non-secret inputs declared for the `${CCC_INPUT_*}` placeholders. */
+  readonly inputs: SecretSpec[] = [];
   private readonly byValue = new Map<string, string>();
+  private readonly privateDomains: readonly string[];
 
   constructor(
     private readonly module: string,
     private readonly prefix: string,
     private readonly taken: Set<string>,
-  ) {}
+    options: RedactorOptions = {},
+  ) {
+    this.privateDomains = options.privateDomains ?? [];
+  }
 
-  private placeholder(value: string, hint: string, location: string): string {
-    let name = this.byValue.get(value);
+  private placeholder(
+    value: string,
+    hint: string,
+    location: string,
+    kind: "secret" | "input" = "secret",
+  ): string {
+    const key = `${kind}:${value}`;
+    let name = this.byValue.get(key);
     if (!name) {
-      const base = toSecretName(this.prefix, hint);
+      const base =
+        kind === "secret" ? toSecretName(this.prefix, hint) : toInputName(this.prefix, hint);
       name = base;
       for (let n = 2; this.taken.has(name); n += 1) name = `${base}_${n}`;
       this.taken.add(name);
-      this.byValue.set(value, name);
-      this.secrets.push({ name, description: `${location} (${this.module})` });
+      this.byValue.set(key, name);
+      (kind === "secret" ? this.secrets : this.inputs).push({
+        name,
+        description: `${location} (${this.module})`,
+      });
     }
     const placeholder = `\${${name}}`;
-    this.redactions.push({ module: this.module, location, placeholder });
+    (kind === "secret" ? this.redactions : this.privacy).push({
+      module: this.module,
+      location,
+      placeholder,
+    });
     return placeholder;
   }
 
-  /** Redacts credential-shaped substrings of a string. */
+  /** Redacts credential-shaped substrings, then private infrastructure details, of a string. */
   redactText(text: string, hint: string, location: (offset: number) => string): string {
+    const secrets = findSecrets(text).map((span) => ({ ...span, kind: "secret" as const }));
+    const privateSpans = findPrivate(text, this.privateDomains)
+      .filter((span) => !secrets.some((s) => span.start < s.end && span.end > s.start))
+      .map((span) => ({ ...span, kind: "input" as const }));
+    const spans = [...secrets, ...privateSpans].sort((a, b) => a.start - b.start);
     let out = "";
     let last = 0;
-    for (const span of findSecrets(text)) {
+    for (const span of spans) {
+      const value = text.slice(span.start, span.end);
+      const spanHint = span.kind === "input" && hint === "TOKEN" ? privateHint(value) : hint;
       out += text.slice(last, span.start);
-      out += this.placeholder(text.slice(span.start, span.end), hint, location(span.start));
+      out += this.placeholder(value, spanHint, location(span.start), span.kind);
       last = span.end;
     }
     return out + text.slice(last);
