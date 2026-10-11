@@ -46,6 +46,7 @@ Strategy: `single-pr` (user decision 2026-10-11). Create public repo elvisgastel
 | T10 | Review 2 fixes on PR #1: broader secret detection (`*_KEY`, `DATABASE_URL`, hex, URL credentials, MCP argv), status honors secrets/keep, bounded+tolerant capture walk, Node >= 20.12 floor, capture requires `--out` when running from the installer checkout, small R2 cleanups | delegated | [x] | 9e0b420 |
 | T11 | Engine: command steps gain `os` filter, `env` (with secret placeholders), `shell` convenience; modules gain `provides` (claudeDir globs, settings JSON pointers, CLAUDE.md block markers, MCP server names); capture skips anything a non-personal catalog module provides, plus `skills/synced` and `homelab-service-manager`, and strips installer-managed CLAUDE.md blocks | delegated | [x] | 4b2fc27 |
 | T12 | Catalog: installer modules (claude-commit-skill, kaneo-work-tracking-skill, claude-continue-skill, claude-statusline, configure-env, herdr + herdr-config) and tool modules (gentle-ai, engram, codegraph: install if missing on macOS+Linux, then each tool's Claude setup); `personal` profile skeleton; doctor prerequisites (curl, jq, bash, brew/npm) | delegated | [x] | 67e4ff3 |
+| T14 | User decisions + review 4 fixes: statusline via installer; gentle-ai-claude owns engram/codegraph MCP + hooks (engram/codegraph setup only when gentle-ai did not); core-settings in personal; pin configure-env; array-item provides; pin remote installers to commit SHAs; jq-based MCP checks on user-scope mcpServers; herdr check without SIGPIPE; capture: warn on provides load errors, never overwrite an unparseable personal profile, report skipped statusline script, fix profile action + marker docs | delegated | [ ] | |
 | T13 | Re-run real capture dry-run, show the user, write leftover personal modules (settings + personal CLAUDE.md sections) only after approval | parent | [ ] | |
 
 Route evidence: empty repo, 5 tasks across many non-trivial files → one bounded writer (mandatory writer trigger).
@@ -133,5 +134,9 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 - `@elvisgastelum/configure-env` is not version-pinned.
 - Linux without Homebrew: tool installs are skipped (no verified non-brew install for gentle-ai/engram/herdr).
 
+## Review 4 (T11–T12, base 25254b0)
+- Parent spot check: `pnpm test` → 102/102. Native review high → standing consent; START returned `candidate_context_unavailable` (unsupported risk reason `dangerous_sink`) but the bound lineage STATUS re-offered the four lens slots; four lenses **approved**, acknowledged (lineage review-b028ef798593fbf6).
+- Warnings scheduled in T14 (see row). User decisions 2026-10-11: statusline via installer; gentle-ai owns engram/codegraph setup; add core-settings to personal; pin configure-env; array-item provides; Linux without brew skips with reason.
+
 ## Next step
-Parent runs the T13 real capture dry-run (now provides-aware) and asks the user before writing.
+Writer implements T14. Then parent runs T13 (real capture dry-run → ask → write).
