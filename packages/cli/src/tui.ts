@@ -10,9 +10,9 @@ import {
   select,
   spinner,
 } from "@clack/prompts";
-import { apply, doctor, plan, type Selection, status } from "@claude-curated/core";
+import { doctor, plan, type Selection, startApply, status } from "@claude-curated/core";
 import type { Context } from "./commands";
-import { EXIT, planSummary, renderPlan } from "./output";
+import { EXIT, pendingCount, renderPlan } from "./output";
 
 class Cancelled extends Error {}
 
@@ -87,8 +87,7 @@ export async function runTui(ctx: Context, version: string): Promise<number> {
 
     const planned = plan({ catalog, claudeDir: ctx.claudeDir, ...selection });
     note(renderPlan(planned, c), "Plan");
-    const summary = planSummary(planned);
-    if (summary.create + summary.update + summary.run === 0) {
+    if (pendingCount(planned) === 0) {
       outro(c.green("Everything is already up to date."));
       return EXIT.ok;
     }
@@ -100,20 +99,17 @@ export async function runTui(ctx: Context, version: string): Promise<number> {
     }
 
     // Apply one module at a time so the spinner can render between modules.
-    const now = new Date();
-    let backupDir: string | null = null;
-    let ok = true;
+    const run = startApply(planned);
     for (const mod of planned.modules) {
       const spin = spinner();
       spin.start(`Applying ${mod.name}`);
       await tick();
-      const result = apply({ claudeDir: planned.claudeDir, modules: [mod] }, { now: () => now });
-      backupDir ??= result.backupDir;
-      const failed = result.modules[0]?.steps.filter((s) => s.status === "failed") ?? [];
-      const skipped = result.modules[0]?.steps.filter((s) => s.status === "skipped") ?? [];
-      if (failed.length > 0) {
-        ok = false;
-        spin.error(`${mod.name}: ${failed.map((s) => s.message).join("; ")}`);
+      const result = run.module(mod);
+      const failed = result.steps.filter((s) => s.status === "failed");
+      const skipped = result.steps.filter((s) => s.status === "skipped");
+      if (!result.ok) {
+        const why = failed.length > 0 ? failed : skipped;
+        spin.error(`${mod.name}: ${why.map((s) => s.message).join("; ")}`);
       } else if (skipped.length > 0) {
         spin.stop(
           `${mod.name} ${c.magenta(`skipped: ${skipped.map((s) => s.message).join("; ")}`)}`,
@@ -122,6 +118,7 @@ export async function runTui(ctx: Context, version: string): Promise<number> {
         spin.stop(`${mod.name} ${c.green("done")}`);
       }
     }
+    const { backupDir, ok } = run.finish();
 
     const next = [
       backupDir ? `Backups of replaced files: ${backupDir}` : "No existing files were replaced.",

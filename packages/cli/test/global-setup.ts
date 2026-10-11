@@ -1,11 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-/** Builds the CLI when dist is missing so the integration tests can run standalone. */
+/** Always rebuilds the CLI so the integration tests never run a stale dist. */
 export default function setup(): void {
   const root = fileURLToPath(new URL("..", import.meta.url));
-  if (!existsSync(new URL("../dist/index.js", import.meta.url))) {
-    execFileSync("pnpm", ["exec", "tsup"], { cwd: root, stdio: "inherit" });
-  }
+  execFileSync("pnpm", ["exec", "tsup", "--silent"], { cwd: root, stdio: "inherit" });
 }

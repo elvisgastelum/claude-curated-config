@@ -53,6 +53,12 @@ export function planSummary(plan: Plan): Record<PlanAction, number> {
   );
 }
 
+/** Number of steps that would change something (create, update or run). */
+export function pendingCount(plan: Plan): number {
+  const summary = planSummary(plan);
+  return summary.create + summary.update + summary.run;
+}
+
 export function listDoc(catalog: Catalog) {
   return {
     schema: "ccc.list/v1",

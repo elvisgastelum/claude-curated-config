@@ -23,7 +23,7 @@ main() {
   local ref="${CCC_REF:-main}"
   local home_dir="${CCC_HOME:-$HOME/.local/share/claude-curated-config}"
   local bin_dir="${CCC_BIN_DIR:-$HOME/.local/bin}"
-  local min_node=20
+  local entry="$home_dir/packages/cli/dist/index.js"
 
   local c_info="" c_warn="" c_err="" c_off=""
   if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -40,13 +40,8 @@ main() {
   command -v git >/dev/null 2>&1 ||
     die "git is required but was not found." "install git: https://git-scm.com/downloads"
   command -v node >/dev/null 2>&1 ||
-    die "Node.js >= ${min_node} is required but was not found." \
-      "install Node.js ${min_node}+ (https://nodejs.org, nvm, fnm or your package manager), then re-run."
-  local node_major
-  node_major="$(node -p 'process.versions.node.split(".")[0]')"
-  [ "$node_major" -ge "$min_node" ] ||
-    die "Node.js >= ${min_node} is required (found $(node --version))." \
-      "upgrade Node.js (e.g. 'nvm install 22'), then re-run."
+    die "Node.js is required but was not found." \
+      "install Node.js (https://nodejs.org, nvm, fnm or your package manager), then re-run."
 
   export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
   local -a pnpm_cmd
@@ -63,22 +58,62 @@ main() {
       "run 'npm install -g corepack && corepack enable' or 'npm install -g pnpm', then re-run."
   fi
 
+  # The minimum Node.js version lives in one place: the checkout's package.json `engines.node`.
+  check_node() {
+    local min major
+    min="$(cd "$home_dir" && node -p 'Number((/[0-9]+/.exec(require("./package.json").engines.node) || ["0"])[0])')" ||
+      return 1
+    major="$(node -p 'process.versions.node.split(".")[0]')"
+    if [ "$major" -lt "$min" ]; then
+      printf '%serror:%s Node.js >= %s is required (found %s).\n  fix: %s\n' "$c_err" "$c_off" \
+        "$min" "$(node --version)" "upgrade Node.js (e.g. 'nvm install 22'), then re-run." >&2
+      return 1
+    fi
+  }
+  build_checkout() {
+    check_node || return 1
+    say "Installing dependencies"
+    (cd "$home_dir" && "${pnpm_cmd[@]}" install --frozen-lockfile </dev/null >&2) || return 1
+    say "Building"
+    (cd "$home_dir" && "${pnpm_cmd[@]}" build </dev/null >&2) || return 1
+    [ -f "$entry" ] || {
+      printf '%serror:%s build did not produce %s\n' "$c_err" "$c_off" "$entry" >&2
+      return 1
+    }
+  }
+
+  local prev=""
   if [ -d "$home_dir/.git" ]; then
+    prev="$(git -C "$home_dir" rev-parse HEAD)"
     say "Updating $home_dir ($ref)"
-    git -C "$home_dir" pull --ff-only --quiet origin "$ref" </dev/null >&2
+    git -C "$home_dir" pull --ff-only --quiet origin "$ref" </dev/null >&2 ||
+      die "could not update $home_dir; the installed version is unchanged." \
+        "check your network and that $home_dir has no local commits, then re-run."
   else
+    [ ! -e "$home_dir" ] ||
+      die "$home_dir exists but is not a git checkout." "move it away or set CCC_HOME, then re-run."
     say "Cloning $repo ($ref) into $home_dir"
     mkdir -p "$(dirname "$home_dir")"
-    git clone --quiet --branch "$ref" "$repo" "$home_dir" </dev/null >&2
+    git clone --quiet --branch "$ref" "$repo" "$home_dir" </dev/null >&2 || {
+      rm -rf "$home_dir"
+      die "could not clone $repo ($ref)." "check the URL, the ref and your network, then re-run."
+    }
   fi
 
-  say "Installing dependencies"
-  (cd "$home_dir" && "${pnpm_cmd[@]}" install --frozen-lockfile </dev/null >&2)
-  say "Building"
-  (cd "$home_dir" && "${pnpm_cmd[@]}" build </dev/null >&2)
-
-  local entry="$home_dir/packages/cli/dist/index.js"
-  [ -f "$entry" ] || die "build did not produce $entry" "run 'pnpm build' in $home_dir and check the output."
+  if ! build_checkout; then
+    if [ -z "$prev" ]; then
+      rm -rf "$home_dir"
+      die "installation failed; removed the partial checkout at $home_dir." \
+        "fix the error above, then re-run the installer."
+    fi
+    warn "update failed; restoring the previous version ($prev)"
+    if git -C "$home_dir" reset --hard --quiet "$prev" </dev/null >&2 && build_checkout; then
+      die "update to $ref failed; the previous version is still installed and working." \
+        "fix the error above, then re-run the installer to update."
+    fi
+    die "update failed and the previous version could not be rebuilt." \
+      "remove $home_dir and re-run the installer."
+  fi
 
   mkdir -p "$bin_dir"
   printf '#!/bin/sh\nexec node "%s" "$@"\n' "$entry" >"$bin_dir/ccc"

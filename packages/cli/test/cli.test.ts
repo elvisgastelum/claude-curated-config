@@ -113,7 +113,7 @@ describe("ccc --cli", () => {
     expect(statuses(doc)).toEqual(["done", "done"]);
     expect(readFileSync(join(claudeDir, "CLAUDE.md"), "utf8")).toContain("EDIT ME");
     const settings = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf8"));
-    expect(settings.permissions.deny).toContain("Read(./.env)");
+    expect(settings.permissions.deny).toContain("Read(**/.env)");
 
     const second = ccc([...args, "--claude-dir", claudeDir]);
     expect(second.code).toBe(0);

@@ -81,6 +81,8 @@ export interface PlannedModule {
   name: string;
   description: string;
   dir: string;
+  /** Ids of the modules this one requires (they come earlier in the plan). */
+  requires: string[];
   steps: PlannedStep[];
 }
 

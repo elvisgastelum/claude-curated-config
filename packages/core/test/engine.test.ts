@@ -1,10 +1,14 @@
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   readlinkSync,
+  rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -16,6 +20,7 @@ import {
   deepMerge,
   doctor,
   loadCatalog,
+  MIN_NODE_MAJOR,
   plan,
   resolveClaudeDir,
   resolveDest,
@@ -252,6 +257,113 @@ describe("plan and apply", () => {
   });
 });
 
+describe("hardening", () => {
+  const NOW = () => new Date("2026-01-02T03:04:05.000Z");
+
+  it("uses a unique backup dir per run and never overwrites an existing backup", () => {
+    const catalog = loadCatalog(basicCatalog());
+    const claudeDir = tempDir();
+    writeFileSync(join(claudeDir, "CLAUDE.md"), "first\n");
+    const one = apply(plan({ catalog, claudeDir, modules: ["notes"], env: NO_BINS }), {
+      env: NO_BINS,
+      now: NOW,
+    });
+    writeFileSync(join(claudeDir, "CLAUDE.md"), "second\n");
+    const two = apply(plan({ catalog, claudeDir, modules: ["notes"], env: NO_BINS }), {
+      env: NO_BINS,
+      now: NOW,
+    });
+    expect(one.backupDir).not.toBeNull();
+    expect(two.backupDir).not.toBeNull();
+    expect(two.backupDir).not.toBe(one.backupDir);
+    expect(readFileSync(join(one.backupDir ?? "", "CLAUDE.md"), "utf8")).toBe("first\n");
+    expect(readFileSync(join(two.backupDir ?? "", "CLAUDE.md"), "utf8")).toBe("second\n");
+  });
+
+  it("surfaces blocked steps in dry-run results", () => {
+    const catalog = loadCatalog(basicCatalog());
+    const claudeDir = tempDir();
+    writeFileSync(join(claudeDir, "settings.json"), "{ not json");
+    const result = apply(plan({ catalog, claudeDir, modules: ["settings"], env: NO_BINS }), {
+      dryRun: true,
+      env: NO_BINS,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.modules[0]?.steps[0]?.status).toBe("failed");
+    expect(result.modules[0]?.steps[0]?.message).toMatch(/not valid JSON/);
+    expect(readFileSync(join(claudeDir, "settings.json"), "utf8")).toBe("{ not json");
+  });
+
+  it("replaces a dangling symlink and backs up its target text", () => {
+    const catalog = loadCatalog(basicCatalog());
+    const claudeDir = tempDir();
+    const outside = join(tempDir(), "missing", "settings.json");
+    symlinkSync("/nonexistent/ccc/CLAUDE.md", join(claudeDir, "CLAUDE.md"));
+    symlinkSync(outside, join(claudeDir, "settings.json"));
+    const p = plan({ catalog, claudeDir, profile: "minimal", env: NO_BINS });
+    expect(p.modules.flatMap((m) => m.steps.map((s) => s.action))).toEqual(["update", "update"]);
+    const result = apply(p, { env: NO_BINS });
+    expect(result.ok).toBe(true);
+    for (const name of ["CLAUDE.md", "settings.json"]) {
+      expect(lstatSync(join(claudeDir, name)).isFile()).toBe(true);
+    }
+    expect(readlinkSync(join(result.backupDir ?? "", "CLAUDE.md"))).toBe(
+      "/nonexistent/ccc/CLAUDE.md",
+    );
+    expect(existsSync(outside)).toBe(false);
+  });
+
+  it("records a step error, skips the rest of the module and its dependents, and continues", () => {
+    const dir = writeCatalog([
+      {
+        id: "broken",
+        steps: [
+          { type: "file", src: "gone.md", dest: "gone.md" },
+          { type: "file", src: "ok.md", dest: "ok.md" },
+        ],
+        files: { "gone.md": "x", "ok.md": "ok" },
+      },
+      {
+        id: "dependent",
+        requires: ["broken"],
+        steps: [{ type: "file", src: "d.md", dest: "d.md" }],
+        files: { "d.md": "d" },
+      },
+      {
+        id: "independent",
+        steps: [{ type: "file", src: "i.md", dest: "i.md" }],
+        files: { "i.md": "i" },
+      },
+    ]);
+    const catalog = loadCatalog(dir);
+    rmSync(join(dir, "modules", "broken", "gone.md"));
+    const claudeDir = tempDir();
+    const p = plan({ catalog, claudeDir, modules: ["dependent", "independent"], env: NO_BINS });
+    expect(p.modules[0]?.steps[0]).toMatchObject({ action: "skip", blocked: true });
+    const result = apply(p, { env: NO_BINS });
+    expect(result.ok).toBe(false);
+    const byId = Object.fromEntries(result.modules.map((m) => [m.id, m]));
+    expect(byId.broken?.steps.map((s) => s.status)).toEqual(["failed", "skipped"]);
+    expect(byId.broken?.steps[0]?.message).toMatch(/gone\.md|ENOENT/);
+    expect(byId.dependent?.ok).toBe(false);
+    expect(byId.dependent?.steps.map((s) => s.status)).toEqual(["skipped"]);
+    expect(byId.dependent?.steps[0]?.message).toMatch(/broken/);
+    expect(byId.independent?.steps.map((s) => s.status)).toEqual(["done"]);
+    expect(existsSync(join(claudeDir, "ok.md"))).toBe(false);
+    expect(readFileSync(join(claudeDir, "i.md"), "utf8")).toBe("i");
+  });
+
+  it("writes atomically, preserving the file mode and leaving no temp files", () => {
+    const catalog = loadCatalog(basicCatalog());
+    const claudeDir = tempDir();
+    writeFileSync(join(claudeDir, "settings.json"), "{}");
+    chmodSync(join(claudeDir, "settings.json"), 0o600);
+    apply(plan({ catalog, claudeDir, modules: ["settings"], env: NO_BINS }), { env: NO_BINS });
+    expect(statSync(join(claudeDir, "settings.json")).mode & 0o777).toBe(0o600);
+    expect(readdirSync(claudeDir).filter((n) => n.includes(".tmp"))).toEqual([]);
+  });
+});
+
 describe("command steps", () => {
   const commandCatalog = () =>
     writeCatalog([
@@ -344,6 +456,20 @@ describe("doctor", () => {
     expect(byId.claude?.fix).toBeTruthy();
     expect(byId["claude-dir"]?.ok).toBe(true);
     expect(report.ok).toBe(true);
+  });
+
+  it("reads the minimum Node major from the root package.json engines", async () => {
+    const root = JSON.parse(
+      readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
+    );
+    const cli = JSON.parse(
+      readFileSync(new URL("../../cli/package.json", import.meta.url), "utf8"),
+    );
+    expect(root.engines.node).toBe(`>=${MIN_NODE_MAJOR}`);
+    expect(cli.engines.node).toBe(root.engines.node);
+    expect(doctor({ claudeDir: tempDir(), nodeVersion: `${MIN_NODE_MAJOR - 1}.0.0` }).ok).toBe(
+      false,
+    );
   });
 
   it("flags an unwritable claude dir", () => {

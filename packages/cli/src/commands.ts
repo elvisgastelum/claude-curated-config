@@ -17,8 +17,8 @@ import {
   EXIT,
   listDoc,
   makeColors,
+  pendingCount,
   planDoc,
-  planSummary,
   renderApply,
   renderDoctor,
   renderList,
@@ -114,8 +114,7 @@ export async function planCommand(ctx: Context, flags: SelectionOptions): Promis
 export async function applyCommand(ctx: Context, flags: ApplyFlags): Promise<number> {
   const selection = toSelection(flags);
   const planned = plan({ catalog: ctx.catalog(), claudeDir: ctx.claudeDir, ...selection });
-  const summary = planSummary(planned);
-  const pending = summary.create + summary.update + summary.run;
+  const pending = pendingCount(planned);
 
   if (!flags.yes && !flags.dryRun && pending > 0) {
     if (!ctx.interactive) {

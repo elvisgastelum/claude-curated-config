@@ -1,9 +1,11 @@
 import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import rootPkg from "../../../package.json" with { type: "json" };
 import { which } from "./exec";
 import type { DoctorCheck, DoctorReport } from "./types";
 
-export const MIN_NODE_MAJOR = 20;
+/** Minimum Node.js major, read from the root package.json `engines.node` (single source). */
+export const MIN_NODE_MAJOR = Number(/\d+/.exec(rootPkg.engines.node)?.[0] ?? "20");
 
 function writableDir(path: string): { ok: boolean; message: string } {
   let current = resolve(path);

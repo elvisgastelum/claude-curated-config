@@ -37,7 +37,7 @@ Rules:
 | Code | Meaning | What to do |
 |------|---------|------------|
 | 0 | Success | Report the result. |
-| 1 | A step failed, or `doctor` found a required check failing | Read `message` on failed steps (or `fix` on failed checks), report, do not retry blindly. |
+| 1 | A step failed (or is blocked, also under `--dry-run`), or `doctor` found a required check failing | Read `message` on failed steps (or `fix` on failed checks), report, do not retry blindly. |
 | 2 | Usage error or refusal (e.g. `apply` without `--yes`) | Fix the arguments. |
 | 3 | Catalog or validation error (unknown module or profile) | Run `list`, use a real id. |
 
@@ -52,7 +52,7 @@ Every document has a `schema` field.
 - `ccc.status/v1`: `{ claudeDir, modules: [{ id, name, state: "applied" | "partial" | "not-applied", satisfied, pending, skipped }] }`.
 - `ccc.error/v1`: `{ error: { code, message }, exitCode }`.
 
-Plan actions: `create` (new file), `update` (existing file changes, backed up first), `unchanged`, `run` (a command will run), `skip` (e.g. a required binary is missing; `blocked: true` means it cannot be applied and `apply` will fail).
+Plan actions: `create` (new file), `update` (existing file changes, backed up first), `unchanged`, `run` (a command will run), `skip` (e.g. a required binary is missing; `blocked: true` means it cannot be applied and `apply`, including `--dry-run`, reports it as `failed`). A failed step never aborts the run: later steps of the same module and modules that require it are `skipped` with a message naming the failure, other modules still apply, and the full report is printed.
 
 ## Develop this repo
 
@@ -79,7 +79,7 @@ pnpm dev         # tsup --watch for the CLI
 
 ### Conventions
 
-- TypeScript ESM, Node >= 20, strict mode. Biome formats and lints; run `pnpm format` before committing.
+- TypeScript ESM, strict mode. The minimum Node version has one source: `engines.node` in the root `package.json` (read by `doctor` and `install.sh`; keep `packages/cli/package.json` equal, a test checks it). Biome formats and lints; run `pnpm format` before committing.
 - Tests first for behavior changes. Core tests use temp dirs; CLI integration tests run the built bin with a temp `--claude-dir`.
 - Never touch the real `~/.claude` in tests or manual checks; always pass a temp `--claude-dir`. Tests must not run the real `claude` binary: use a fake executable on `PATH` or assert `skip`.
 - The CLI keeps `@claude-curated/catalog` external so `catalogDir` resolves to the real data directory; core is bundled.

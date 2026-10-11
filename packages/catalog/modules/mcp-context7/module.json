@@ -16,7 +16,7 @@
         "--",
         "npx",
         "-y",
-        "@upstash/context7-mcp"
+        "@upstash/context7-mcp@4.3.0"
       ],
       "check": ["claude", "mcp", "get", "context7"],
       "requiresBin": "claude"

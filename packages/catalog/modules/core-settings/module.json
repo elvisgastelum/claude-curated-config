@@ -1,7 +1,7 @@
 {
   "id": "core-settings",
   "name": "Core settings",
-  "description": "Adds the settings.json schema and denies reading .env files and secrets/.",
+  "description": "Adds the settings.json schema and denies reading .env files and secrets/ directories anywhere (**/ globs).",
   "tags": ["settings", "security"],
   "steps": [{ "type": "json-merge", "src": "settings.json", "dest": "settings.json" }]
 }

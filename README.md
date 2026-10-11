@@ -8,7 +8,7 @@ Set up Claude Code (`~/.claude`) on any machine from a curated catalog of settin
 curl -fsSL https://raw.githubusercontent.com/elvisgastelum/claude-curated-config/main/install.sh | bash
 ```
 
-Requirements: `git` and Node.js 20 or newer. The installer enables pnpm through corepack, clones the repo to `~/.local/share/claude-curated-config` (or pulls if it is already there), builds it, adds a `ccc` command to `~/.local/bin`, and starts the TUI.
+Requirements: `git` and Node.js 20 or newer (the single source is `engines.node` in `package.json`; the installer and `ccc doctor` both read it). The installer enables pnpm through corepack, clones the repo to `~/.local/share/claude-curated-config` (or pulls if it is already there), builds it, adds a `ccc` command to `~/.local/bin`, and starts the TUI.
 
 Run `ccc` again any time to add modules or update to the latest catalog (re-run the one-liner to update the code).
 
@@ -47,7 +47,7 @@ Global flags:
 | `--yes`, `--dry-run` | (`apply`) Skip confirmation / preview without writing. |
 | `--no-color`, `-v` | Disable colors / print the version. |
 
-Exit codes: `0` ok, `1` a step failed, `2` usage error or refusal (for example `apply` without `--yes` outside a terminal), `3` catalog or validation error, `130` cancelled.
+Exit codes: `0` ok, `1` a step failed (or, with `--dry-run`, would fail), `2` usage error or refusal (for example `apply` without `--yes` outside a terminal), `3` catalog or validation error, `130` cancelled.
 
 ## Profiles and modules
 
@@ -58,17 +58,20 @@ Exit codes: `0` ok, `1` a step failed, `2` usage error or refusal (for example `
 
 | Module | Installs |
 |--------|----------|
-| `core-settings` | Merges the settings schema and `permissions.deny` rules for `.env` files and `secrets/` into `settings.json`. |
+| `core-settings` | Merges the settings schema and `permissions.deny` rules `Read(**/.env)`, `Read(**/.env.*)` and `Read(**/secrets/**)` (any depth) into `settings.json`. |
 | `global-instructions` | A starter `CLAUDE.md` with personal rules. Edit it after installing. |
 | `skill-commit` | `skills/commit/SKILL.md`, a title-only commit message policy. |
-| `mcp-context7` | Registers the Context7 MCP server with `claude mcp add --scope user` (skipped if `claude` is not installed). |
+| `mcp-context7` | Registers the Context7 MCP server (`@upstash/context7-mcp`, pinned version) with `claude mcp add --scope user` (skipped if `claude` is not installed). |
 
 To add your own, see [packages/catalog/README.md](packages/catalog/README.md).
 
 ## Safety
 
 - Writes only inside the target directory. Catalog paths that are absolute or contain `..` are rejected. Only `command` steps (such as `claude mcp add`) act outside it.
-- Before replacing a file that differs, the old version is copied to `<claude-dir>/.ccc-backups/<timestamp>/`.
+- Before replacing a file that differs, the old version is copied to `<claude-dir>/.ccc-backups/<timestamp>/` (a new directory per run; existing backups are never overwritten). A replaced symlink is backed up as a symlink with the same target.
+- Writes are atomic (temp file + rename), so an interrupted run never leaves a half-written file.
+- A failing step does not stop the run: the rest of its module and the modules that require it are skipped, everything else is applied, and the report lists every step (exit code `1`).
+- If the installer fails on a fresh install it removes the partial checkout; if an update fails it restores and rebuilds the previous version.
 - `json-merge` keeps your existing keys and array entries; it only adds what the catalog defines (catalog values win for keys present in both).
 - Idempotent: a second apply reports everything `unchanged`.
 - `--dry-run` and `plan` never write anything.

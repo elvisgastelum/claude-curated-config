@@ -18,7 +18,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "tsup && vitest run"
+    "test": "vitest run"
   },
   "dependencies": {
     "@claude-curated/catalog": "workspace:*",

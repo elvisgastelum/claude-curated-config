@@ -1,18 +1,15 @@
-import {
-  copyFileSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  readlinkSync,
-  renameSync,
-  symlinkSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { resolveSelection } from "./catalog";
 import { runArgv, which } from "./exec";
+import {
+  type BackupStore,
+  createBackupStore,
+  isLink,
+  occupied,
+  symlinkAtomic,
+  writeFileAtomic,
+} from "./fsutil";
 import { changedPaths, deepMerge } from "./merge";
 import { resolveDest, resolveInside } from "./paths";
 import type {
@@ -31,7 +28,7 @@ import type {
   StepResult,
 } from "./types";
 
-export const BACKUP_DIR_NAME = ".ccc-backups";
+export { BACKUP_DIR_NAME } from "./fsutil";
 
 interface Evaluation {
   action: PlanAction;
@@ -39,6 +36,8 @@ interface Evaluation {
   summary: string;
   blocked?: boolean;
   destPath?: string;
+  /** Where content is written when it differs from `destPath` (a json-merge through a symlink). */
+  writePath?: string;
   /** Content to write for copy and json-merge steps. */
   content?: Buffer;
   /** Absolute symlink target for symlink steps. */
@@ -69,7 +68,8 @@ function evaluateFile(
 ): Evaluation {
   const srcPath = resolveInside(mod.dir, step.src, "src");
   const destPath = resolveDest(claudeDir, step.dest);
-  const stat = existsSync(destPath) || isLink(destPath) ? lstatSync(destPath) : null;
+  // lstat: a dangling symlink is "there" (and replaceable) even though existsSync says no.
+  const stat = occupied(destPath) ? lstatSync(destPath) : null;
   if (stat?.isDirectory()) {
     return {
       action: "skip",
@@ -102,13 +102,22 @@ function evaluateFile(
       content,
     };
   }
+  if (stat.isSymbolicLink()) {
+    return {
+      action: "update",
+      reason: existsSync(destPath) ? "replace symlink with file" : "replace dangling symlink",
+      summary: `replace symlink -> ${readlinkSync(destPath)}`,
+      destPath,
+      content,
+    };
+  }
   const current = readFileSync(destPath);
-  if (!stat.isSymbolicLink() && current.equals(content)) {
+  if (current.equals(content)) {
     return { action: "unchanged", reason: "identical content", summary: "", destPath };
   }
   return {
     action: "update",
-    reason: stat.isSymbolicLink() ? "replace symlink with file" : "content differs",
+    reason: "content differs",
     summary: lineDiff(current.toString("utf8"), content.toString("utf8")),
     destPath,
     content,
@@ -122,7 +131,19 @@ function evaluateJsonMerge(
 ): Evaluation {
   const src = JSON.parse(readFileSync(resolveInside(mod.dir, step.src, "src"), "utf8"));
   const destPath = resolveDest(claudeDir, step.dest);
+  const link = isLink(destPath);
   const exists = existsSync(destPath);
+  if (exists && lstatSync(destPath).isDirectory()) {
+    return {
+      action: "skip",
+      reason: `${step.dest} is a directory`,
+      summary: "blocked",
+      blocked: true,
+      destPath,
+    };
+  }
+  // A live symlink (e.g. into a dotfiles repo) is merged through; a dangling one is replaced.
+  const writePath = link && exists ? realpathSync(destPath) : destPath;
   let existing: unknown = {};
   if (exists) {
     try {
@@ -138,6 +159,16 @@ function evaluateJsonMerge(
     }
   }
   const merged = deepMerge(existing, src);
+  const content = Buffer.from(`${JSON.stringify(merged, null, 2)}\n`);
+  if (link && !exists) {
+    return {
+      action: "update",
+      reason: "replace dangling symlink",
+      summary: `replace symlink -> ${readlinkSync(destPath)}`,
+      destPath,
+      content,
+    };
+  }
   const changes = changedPaths(exists ? existing : undefined, merged);
   if (exists && changes.length === 0) {
     return { action: "unchanged", reason: "all keys already present", summary: "", destPath };
@@ -147,7 +178,8 @@ function evaluateJsonMerge(
     reason: exists ? "merge new keys" : "file does not exist",
     summary: exists ? `merges ${describePaths(changes)}` : "new JSON file",
     destPath,
-    content: Buffer.from(`${JSON.stringify(merged, null, 2)}\n`),
+    writePath,
+    content,
   };
 }
 
@@ -173,21 +205,23 @@ function evaluate(
   claudeDir: string,
   env: NodeJS.ProcessEnv,
 ): Evaluation {
-  switch (step.type) {
-    case "file":
-      return evaluateFile(step, mod, claudeDir);
-    case "json-merge":
-      return evaluateJsonMerge(step, mod, claudeDir);
-    case "command":
-      return evaluateCommand(step, env);
-  }
-}
-
-function isLink(path: string): boolean {
   try {
-    return lstatSync(path).isSymbolicLink();
-  } catch {
-    return false;
+    switch (step.type) {
+      case "file":
+        return evaluateFile(step, mod, claudeDir);
+      case "json-merge":
+        return evaluateJsonMerge(step, mod, claudeDir);
+      case "command":
+        return evaluateCommand(step, env);
+    }
+  } catch (error) {
+    // One unreadable file must not abort the whole plan: the step is reported as blocked.
+    return {
+      action: "skip",
+      reason: (error as Error).message,
+      summary: "blocked",
+      blocked: true,
+    };
   }
 }
 
@@ -197,6 +231,7 @@ function planModule(mod: CatalogModule, claudeDir: string, env: NodeJS.ProcessEn
     name: mod.name,
     description: mod.description,
     dir: mod.dir,
+    requires: mod.requires ?? [],
     steps: mod.steps.map((step, index) => {
       const evaluation = evaluate(step, mod, claudeDir, env);
       const planned: PlannedStep = {
@@ -237,27 +272,29 @@ export interface ApplyOptions {
   onModuleEnd?: (result: ModuleResult) => void;
 }
 
+export interface ApplyRun {
+  /** Applies one planned module (in plan order) and returns its result. */
+  module(mod: PlannedModule): ModuleResult;
+  /** The full report of every module applied so far. */
+  finish(): ApplyResult;
+}
+
 /**
- * Executes a plan. Steps are re-evaluated against the current disk state, so applying
- * a stale plan never clobbers changes made in between. Existing files that would be
- * replaced are moved to `<claudeDir>/.ccc-backups/<timestamp>/<dest>` first.
+ * Starts an apply run that executes a plan one module at a time (the TUI renders between
+ * modules). Steps are re-evaluated against the current disk state, so applying a stale plan
+ * never clobbers changes made in between. Existing files that would be replaced are copied
+ * to `<claudeDir>/.ccc-backups/<timestamp>/<dest>` first; every write is atomic.
+ *
+ * A failing step never aborts the run: it is recorded as `failed`, the remaining steps of its
+ * module and every module that requires it are `skipped`, and other modules continue.
  */
-export function apply(planToApply: Plan, options: ApplyOptions = {}): ApplyResult {
+export function startApply(planToApply: Plan, options: ApplyOptions = {}): ApplyRun {
   const { claudeDir } = planToApply;
   const env = options.env ?? process.env;
   const dryRun = options.dryRun ?? false;
-  const stamp = (options.now ?? (() => new Date()))().toISOString().replaceAll(":", "-");
-  const backupRoot = join(claudeDir, BACKUP_DIR_NAME, stamp);
-  let backupUsed = false;
-
-  const backup = (destPath: string, dest: string): string => {
-    const target = resolveInside(backupRoot, dest, "backup");
-    mkdirSync(dirname(target), { recursive: true });
-    if (isLink(destPath)) renameSync(destPath, target);
-    else copyFileSync(destPath, target);
-    backupUsed = true;
-    return target;
-  };
+  const backups: BackupStore = createBackupStore(claudeDir, (options.now ?? (() => new Date()))());
+  const failedModules = new Set<string>();
+  const results: ModuleResult[] = [];
 
   const runStep = (planned: PlannedStep, mod: PlannedModule): StepResult => {
     const base = {
@@ -274,71 +311,84 @@ export function apply(planToApply: Plan, options: ApplyOptions = {}): ApplyResul
       status,
       message,
     });
-    if (dryRun) {
-      return result(
-        evaluation.action === "unchanged" ? "unchanged" : "planned",
-        evaluation.summary || evaluation.reason,
-      );
+    if (evaluation.action === "skip") {
+      return result(evaluation.blocked ? "failed" : "skipped", evaluation.reason);
     }
-    switch (evaluation.action) {
-      case "unchanged":
-        return result("unchanged", evaluation.reason);
-      case "skip":
-        return result(evaluation.blocked ? "failed" : "skipped", evaluation.reason);
-      case "run": {
+    if (evaluation.action === "unchanged") return result("unchanged", evaluation.reason);
+    if (dryRun) return result("planned", evaluation.summary || evaluation.reason);
+    try {
+      if (evaluation.action === "run") {
         const step = planned.step as Extract<Step, { type: "command" }>;
         const run = runArgv(step.run, env);
         if (run.code === 0) return result("done", `ran ${step.run.join(" ")}`);
         const output = (run.stderr || run.stdout).trim().split("\n").slice(-5).join("\n");
         return result("failed", `exit ${run.code}: ${output}`);
       }
-      case "create":
-      case "update": {
-        const destPath = evaluation.destPath as string;
-        const dest = planned.dest as string;
-        let backupPath: string | undefined;
-        try {
-          if (evaluation.action === "update" && (existsSync(destPath) || isLink(destPath))) {
-            backupPath = backup(destPath, dest);
-          }
-          mkdirSync(dirname(destPath), { recursive: true });
-          if (evaluation.linkTarget) {
-            // A regular file was copied to the backup above; a symlink was moved there.
-            if (isLink(destPath) || existsSync(destPath)) unlinkSync(destPath);
-            symlinkSync(evaluation.linkTarget, destPath);
-          } else {
-            writeFileSync(destPath, evaluation.content as Buffer);
-          }
-        } catch (error) {
-          return result("failed", (error as Error).message);
-        }
-        const done = result("done", evaluation.summary || evaluation.reason);
-        if (backupPath) done.backup = backupPath;
-        return done;
+      const destPath = evaluation.destPath as string;
+      const writePath = evaluation.writePath ?? destPath;
+      let backupPath: string | undefined;
+      if (evaluation.action === "update" && occupied(writePath)) {
+        backupPath = backups.save(writePath, planned.dest as string);
       }
+      if (evaluation.linkTarget) symlinkAtomic(evaluation.linkTarget, destPath);
+      else writeFileAtomic(writePath, evaluation.content as Buffer);
+      const done = result("done", evaluation.summary || evaluation.reason);
+      if (backupPath) done.backup = backupPath;
+      return done;
+    } catch (error) {
+      return result("failed", (error as Error).message);
     }
   };
 
-  const modules = planToApply.modules.map((mod) => {
-    options.onModuleStart?.(mod);
-    const steps = mod.steps.map((planned) => runStep(planned, mod));
-    const moduleResult: ModuleResult = {
-      id: mod.id,
-      name: mod.name,
-      ok: steps.every((s) => s.status !== "failed"),
-      steps,
-    };
-    options.onModuleEnd?.(moduleResult);
-    return moduleResult;
+  const skippedStep = (planned: PlannedStep, message: string): StepResult => ({
+    index: planned.index,
+    type: planned.type,
+    action: planned.action,
+    status: "skipped",
+    message,
+    dest: planned.dest,
+    command: planned.command,
   });
 
   return {
-    claudeDir,
-    dryRun,
-    ok: modules.every((m) => m.ok),
-    backupDir: backupUsed ? backupRoot : null,
-    modules,
+    module(mod) {
+      options.onModuleStart?.(mod);
+      const failedDep = mod.requires.find((id) => failedModules.has(id));
+      let abort = failedDep ? `requires failed module "${failedDep}"` : null;
+      const steps: StepResult[] = [];
+      for (const planned of mod.steps) {
+        if (abort) {
+          steps.push(skippedStep(planned, abort));
+          continue;
+        }
+        const stepResult = runStep(planned, mod);
+        steps.push(stepResult);
+        if (stepResult.status === "failed") abort = `an earlier step of "${mod.id}" failed`;
+      }
+      const ok = !failedDep && steps.every((s) => s.status !== "failed");
+      if (!ok) failedModules.add(mod.id);
+      const moduleResult: ModuleResult = { id: mod.id, name: mod.name, ok, steps };
+      results.push(moduleResult);
+      options.onModuleEnd?.(moduleResult);
+      return moduleResult;
+    },
+    finish() {
+      return {
+        claudeDir,
+        dryRun,
+        ok: results.every((m) => m.ok),
+        backupDir: backups.dir,
+        modules: [...results],
+      };
+    },
   };
+}
+
+/** Executes a whole plan; see {@link startApply}. Always returns the full report. */
+export function apply(planToApply: Plan, options: ApplyOptions = {}): ApplyResult {
+  const run = startApply(planToApply, options);
+  for (const mod of planToApply.modules) run.module(mod);
+  return run.finish();
 }
 
 export interface StatusOptions {
