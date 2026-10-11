@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -362,6 +363,42 @@ describe("capture review 2", () => {
     expect(written.profile.action).toBe("unchanged");
     expect(written.profile.modules).toEqual([]);
     expect(() => statSync(out)).toThrow();
+  });
+});
+
+describe("capture review 4", () => {
+  it("refuses to overwrite an unparseable or invalid personal profile", () => {
+    const { claudeDir, claudeJson } = fixture();
+    const capture = captureClaudeConfig({ claudeDir, claudeJson });
+    for (const bad of ["{ not json", JSON.stringify({ id: "personal", modules: "x" })]) {
+      const out = join(tempDir(), "catalog");
+      mkdirSync(join(out, "profiles"), { recursive: true });
+      writeFileSync(join(out, "profiles/personal.json"), bad);
+      for (const dryRun of [true, false]) {
+        expect(() => writeCapture(capture, { outDir: out, dryRun })).toThrow(
+          expect.objectContaining({
+            code: "invalid_profile",
+            message: expect.stringMatching(/fix or remove it/),
+          }),
+        );
+      }
+      expect(readFileSync(join(out, "profiles/personal.json"), "utf8")).toBe(bad);
+      expect(existsSync(join(out, "modules"))).toBe(false);
+    }
+  });
+
+  it("reports the profile action from the written text only", () => {
+    const { claudeDir, claudeJson } = fixture();
+    const capture = captureClaudeConfig({ claudeDir, claudeJson });
+    const out = join(tempDir(), "catalog");
+    const first = writeCapture(capture, { outDir: out });
+    expect(first.profile.action).toBe("create");
+    const path = join(out, "profiles/personal.json");
+    // Same modules, different formatting: the file is rewritten, so it is an update.
+    writeFileSync(path, JSON.stringify(JSON.parse(readFileSync(path, "utf8"))));
+    expect(writeCapture(capture, { outDir: out, dryRun: true }).profile.action).toBe("update");
+    expect(writeCapture(capture, { outDir: out }).profile.action).toBe("update");
+    expect(writeCapture(capture, { outDir: out }).profile.action).toBe("unchanged");
   });
 });
 

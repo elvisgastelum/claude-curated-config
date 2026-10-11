@@ -493,6 +493,41 @@ describe("provides-aware capture", () => {
     );
   });
 
+  it("reports the status line script as skipped when /statusLine is provided", () => {
+    const { claudeDir, claudeJson } = setup();
+    const catalog = loadCatalog(
+      writeCatalog([{ id: "status", steps: [], provides: { settings: ["/statusLine"] } }]),
+    );
+    const result = captureClaudeConfig({
+      claudeDir,
+      claudeJson,
+      provided: collectProvided(catalog),
+    });
+    expect(result.items.map((i) => i.id)).not.toContain("personal-statusline");
+    expect(result.skipped).toEqual(
+      expect.arrayContaining([
+        { path: "statusline.sh", reason: "provided by status" },
+        { path: "settings.json /statusLine", reason: "provided by status" },
+      ]),
+    );
+  });
+
+  it("only treats documented marker styles as managed blocks", () => {
+    const text = [
+      "<!-- BEGIN a.b: note -->",
+      "x",
+      "<!-- END a.b -->",
+      "<!-- ns:y -->",
+      "y",
+      "<!-- /ns:y -->",
+      "<!-- plain -->",
+      "z",
+      "<!-- /plain -->",
+      "",
+    ].join("\n");
+    expect(findManagedBlocks(text).map((b) => b.name)).toEqual(["a.b", "ns:y"]);
+  });
+
   it("captures everything except the ignore list without provides", () => {
     const { claudeDir, claudeJson } = setup();
     const result = captureClaudeConfig({ claudeDir, claudeJson });

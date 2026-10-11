@@ -9,8 +9,8 @@ export interface FileStep {
   dest: string;
   mode?: "copy" | "symlink";
   /**
-   * Keep managed blocks (`<!-- BEGIN name -->`...`<!-- END name -->` or `<!-- name -->`...
-   * `<!-- /name -->`) that installers added to the destination: they are appended to the
+   * Keep managed blocks (`<!-- BEGIN name -->`...`<!-- END name -->` or `<!-- ns:name -->`...
+   * `<!-- /ns:name -->`, see `blocks.ts`) that installers added to the destination: they are appended to the
    * copied content, so re-applying is idempotent. Copy mode only.
    */
   preserveBlocks?: boolean;

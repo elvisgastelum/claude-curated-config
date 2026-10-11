@@ -43,7 +43,7 @@ Step types:
 | `json-merge` | Deep-merges `src` into `dest`: objects merge, arrays are unioned without duplicates, existing keys are kept; a value that differs from the user's is a conflict the user decides (`--resolve`/`--on-conflict`, or a TUI prompt). A `dest` that is a symlink to a real file (e.g. a dotfiles repo) is merged through the link. |
 | `command` | Runs `run` as an argv (no shell), or `shell` as a bash script (`bash -o pipefail -c`, so `curl ... \| bash` fails when curl fails). Exactly one of `run`/`shell`. Skipped when `check` (argv) or `checkShell` (bash) exits 0, when `requiresBin` is not on `PATH`, when the OS is not in `os`, or when `globalOnly` is set and the target is not `~/.claude`. |
 
-`file` steps accept `"preserveBlocks": true` (copy mode): managed blocks that installers added to the destination (`<!-- BEGIN name -->`...`<!-- END name -->` or `<!-- name -->`...`<!-- /name -->`) are kept, appended after the copied content, so re-applying stays idempotent.
+`file` steps accept `"preserveBlocks": true` (copy mode): managed blocks that installers added to the destination (`<!-- BEGIN name -->`...`<!-- END name -->`, text after the name such as `: note` ignored, or `<!-- ns:name -->`...`<!-- /ns:name -->`, where the name needs a `ns:` namespace so plain comments are never blocks) are kept, appended after the copied content, so re-applying stays idempotent.
 
 `command` step options:
 

@@ -122,7 +122,7 @@ Secrets are never written. In JSON (settings, env maps, MCP `args`, `env` and `h
 
 Applying a module with secrets asks for each value in the TUI (masked input); in `--cli` mode it reads the environment variable of the same name and exits `2` (`secrets_missing`, listing the names) when one is missing, before writing anything. `apply --dry-run` needs no values: those steps show as `needs secret <NAME>`.
 
-Capture skips what the catalog already installs: paths, settings keys, hook commands, MCP servers and managed CLAUDE.md blocks (`<!-- BEGIN name -->` or `<!-- gentle-ai:name -->` markers) that a non-personal module `provides` are reported as `skipped` with `provided by <module>`. `skills/synced` (managed by Claude) and `skills/homelab-service-manager` are never captured. The captured CLAUDE.md keeps only your own sections and, on apply, keeps the managed blocks installers add.
+Capture skips what the catalog already installs: paths, settings keys, hook commands, MCP servers and managed CLAUDE.md blocks (`<!-- BEGIN name -->`...`<!-- END name -->` or namespaced `<!-- ns:name -->`...`<!-- /ns:name -->` markers such as `gentle-ai:engram`) that a non-personal module `provides` are reported as `skipped` with `provided by <module>`. `skills/synced` (managed by Claude) and `skills/homelab-service-manager` are never captured. The captured CLAUDE.md keeps only your own sections and, on apply, keeps the managed blocks installers add.
 
 Re-running capture updates the personal modules in place (unchanged files are not rewritten). Always review the result with `git diff` before committing.
 

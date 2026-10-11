@@ -2,9 +2,11 @@ import { existsSync, lstatSync, readdirSync, readFileSync, rmSync, statSync } fr
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { findManagedBlocks, stripManagedBlocks } from "./blocks";
+import { CatalogError } from "./errors";
 import { writeFileAtomic } from "./fsutil";
 import { pathMatches } from "./glob";
 import { isPlainObject, type Json } from "./merge";
+import { claudeJsonFor } from "./paths";
 import {
   blockProvider,
   emptyProvided,
@@ -181,10 +183,7 @@ function removeItems(doc: Json, entry: ProvidedEntry, report: (item: string) => 
 
 /** Default `.claude.json`: `~/.claude.json` for `~/.claude`, else `<claudeDir>/.claude.json`. */
 export function defaultClaudeJson(claudeDir: string): string {
-  const home = homedir();
-  return resolve(claudeDir) === join(home, ".claude")
-    ? join(home, ".claude.json")
-    : join(resolve(claudeDir), ".claude.json");
+  return claudeJsonFor(claudeDir);
 }
 
 export function slugify(text: string): string {
@@ -468,6 +467,8 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
     if (script && scriptReason) {
       skip(join(claudeDir, script.rel), scriptReason);
     } else if (script && lineProvider) {
+      // The module owning /statusLine installs its own script: this one is not captured.
+      skip(join(claudeDir, script.rel), `provided by ${lineProvider}`);
       if (!wanted.has("settings")) {
         skipped.push({ path: "settings.json /statusLine", reason: `provided by ${lineProvider}` });
       }
@@ -751,6 +752,17 @@ export function writeCapture(
   const dryRun = options.dryRun ?? false;
   const modulesDir = join(outDir, "modules");
 
+  const profilePath = join(outDir, "profiles", `${PERSONAL_PROFILE_ID}.json`);
+  const current = readSafe(profilePath);
+  const existing = parseProfile(current);
+  if (current && !existing) {
+    // Never replace a profile we cannot read: it may hold hand-written content.
+    throw new CatalogError(
+      "invalid_profile",
+      `${profilePath} is not valid JSON or has no "modules" list; fix or remove it, then capture again (nothing was written)`,
+    );
+  }
+
   const modules = capture.items.map((item) => {
     const dir = join(modulesDir, item.id);
     const desired = new Map<string, { content: Buffer; mode: number }>([
@@ -779,9 +791,6 @@ export function writeCapture(
       )
     : [];
   const personalIds = [...new Set([...previous, ...capture.items.map((item) => item.id)])].sort();
-  const profilePath = join(outDir, "profiles", `${PERSONAL_PROFILE_ID}.json`);
-  const current = readSafe(profilePath);
-  const existing = parseProfile(current);
   // Merge into an existing profile (e.g. installer modules listed by hand): keep its fields and
   // module order, append captured modules it does not list yet.
   const base = existing?.modules ?? [];
@@ -798,12 +807,14 @@ export function writeCapture(
     null,
     2,
   )}\n`;
-  let profileAction: WriteAction = !current
-    ? "create"
-    : current.toString("utf8") === profileText || (existing && ids.length === base.length)
+  // Nothing captured and no profile yet: no profile is written.
+  const profileAction: WriteAction = !current
+    ? ids.length === 0
+      ? "unchanged"
+      : "create"
+    : current.toString("utf8") === profileText
       ? "unchanged"
       : "update";
-  if (ids.length === 0) profileAction = "unchanged"; // nothing captured: no profile is written
   if (!dryRun && profileAction !== "unchanged") {
     writeFileAtomic(profilePath, profileText);
   }

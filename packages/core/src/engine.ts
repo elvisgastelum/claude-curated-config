@@ -13,7 +13,7 @@ import {
   writeFileAtomic,
 } from "./fsutil";
 import { changedPaths, deepMerge, findConflicts } from "./merge";
-import { resolveDest, resolveInside } from "./paths";
+import { claudeJsonFor, resolveDest, resolveInside } from "./paths";
 import {
   MissingSecretError,
   maskJson,
@@ -89,12 +89,10 @@ function homeOf(env: NodeJS.ProcessEnv): string {
   return env.HOME || homedir();
 }
 
-/** `.claude.json` that goes with a Claude dir: `~/.claude.json` for `~/.claude`, else inside it. */
-function claudeJsonFor(claudeDir: string, home: string): string {
-  return resolve(claudeDir) === join(home, ".claude")
-    ? join(home, ".claude.json")
-    : join(resolve(claudeDir), ".claude.json");
-}
+/** How long a `check`/`checkShell` may run before it is killed (counts as failed). */
+export const CHECK_TIMEOUT_MS = 60_000;
+/** How long a command step may run before it is killed (installers can be slow). */
+export const RUN_TIMEOUT_MS = 30 * 60_000;
 
 /** Wraps a step's `shell` script for execution (pipefail so `curl ... | bash` fails on curl errors). */
 function bashArgv(script: string): string[] {
@@ -360,7 +358,7 @@ function evaluateCommand(step: Extract<Step, { type: "command" }>, ctx: EvalCont
     ? bashArgv(substitute(step.checkShell, secrets))
     : step.check?.map((arg) => substitute(arg, secrets));
   if (checkArgv) {
-    const check = runArgv(checkArgv, runEnv, { timeoutMs: 60_000 });
+    const check = runArgv(checkArgv, runEnv, { timeoutMs: CHECK_TIMEOUT_MS });
     if (check.code === 0) return { action: "unchanged", reason: "check passed", summary };
     return { action: "run", reason: "check failed", summary, argv, commandEnv: runEnv };
   }
@@ -570,7 +568,7 @@ export function startApply(planToApply: Plan, options: ApplyOptions = {}): Apply
         const step = planned.step as Extract<Step, { type: "command" }>;
         const runOptions: RunOptions = {
           inheritStdio: Boolean(step.interactive && options.interactive),
-          timeoutMs: 30 * 60_000,
+          timeoutMs: RUN_TIMEOUT_MS,
         };
         const run = runArgv(evaluation.argv ?? [], evaluation.commandEnv ?? env, runOptions);
         if (run.code === 0) return result("done", `ran ${evaluation.summary}`);

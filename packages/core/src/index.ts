@@ -29,9 +29,11 @@ export type { ApplyOptions, ApplyRun, PlanOptions, StatusOptions } from "./engin
 export {
   apply,
   BACKUP_DIR_NAME,
+  CHECK_TIMEOUT_MS,
   commandDisplay,
   conflictKey,
   plan,
+  RUN_TIMEOUT_MS,
   requiredSecrets,
   startApply,
   status,
@@ -45,7 +47,7 @@ export type { BackupStore } from "./fsutil";
 export { createBackupStore, writeFileAtomic } from "./fsutil";
 export type { Json, MergeConflict } from "./merge";
 export { changedPaths, deepMerge, findConflicts, pointerJoin } from "./merge";
-export { resolveClaudeDir, resolveDest, resolveInside } from "./paths";
+export { claudeJsonFor, resolveClaudeDir, resolveDest, resolveInside } from "./paths";
 export type { ProvidedEntry, ProvidedIndex } from "./provides";
 export { collectProvided, PROVIDES_KINDS } from "./provides";
 export type { Redaction, SecretSpec } from "./secrets";

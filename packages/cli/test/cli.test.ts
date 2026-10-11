@@ -456,6 +456,31 @@ describe("ccc --cli", () => {
     expect(state(["--resolve", "core-settings:/$schema=keep"])).toBe("applied");
   });
 
+  it("warns when a catalog's provides cannot be loaded and refuses an invalid personal profile", () => {
+    const home = temp();
+    const claudeDir = join(home, ".claude");
+    writeClaudeFixture(claudeDir, join(home, ".claude.json"), "~/.claude/statusline.sh");
+    const out = join(temp(), "catalog");
+    mkdirSync(join(out, "modules/broken"), { recursive: true });
+    writeFileSync(join(out, "modules/broken/module.json"), "{ nope");
+    const base = ["--cli", "capture", "--json", "--claude-dir", claudeDir, "--out", out];
+
+    const dry = ccc([...base, "--dry-run"], { HOME: home });
+    expect(dry.code).toBe(0);
+    expect(dry.json().warnings).toEqual(
+      expect.arrayContaining([expect.stringMatching(/provides of .*catalog.* not loaded/)]),
+    );
+
+    mkdirSync(join(out, "profiles"), { recursive: true });
+    writeFileSync(join(out, "profiles/personal.json"), "{ broken");
+    const refused = ccc([...base, "--yes"], { HOME: home });
+    expect(refused.code).toBe(3);
+    const error = refused.json().error as { code: string; message: string };
+    expect(error.code).toBe("invalid_profile");
+    expect(error.message).toMatch(/fix or remove it/);
+    expect(readFileSync(join(out, "profiles/personal.json"), "utf8")).toBe("{ broken");
+  });
+
   it("rejects an unknown capture kind with exit 2", () => {
     const run = ccc(["--cli", "capture", "--include", "nope", "--dry-run", "--json"]);
     expect(run.code).toBe(2);

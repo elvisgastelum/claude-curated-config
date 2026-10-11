@@ -9,6 +9,16 @@ export function resolveClaudeDir(flag?: string, env: NodeJS.ProcessEnv = process
   return join(homedir(), ".claude");
 }
 
+/**
+ * The `.claude.json` (user-scope MCP servers) that goes with a Claude dir: `~/.claude.json`
+ * for `~/.claude`, else `<claudeDir>/.claude.json`.
+ */
+export function claudeJsonFor(claudeDir: string, home: string = homedir()): string {
+  return resolve(claudeDir) === join(home, ".claude")
+    ? join(home, ".claude.json")
+    : join(resolve(claudeDir), ".claude.json");
+}
+
 /** Joins a relative path onto a base dir, refusing absolute paths and `..` escapes. */
 export function resolveInside(base: string, rel: string, what = "path"): string {
   if (!rel || isAbsolute(rel) || /^[a-zA-Z]:/.test(rel)) {

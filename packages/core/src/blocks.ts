@@ -12,7 +12,10 @@ export interface ManagedBlock {
 
 /**
  * Opening markers in the two styles installers use:
- * `<!-- BEGIN name[: note] -->` ... `<!-- END name -->` and `<!-- name -->` ... `<!-- /name -->`.
+ * - `<!-- BEGIN name -->` ... `<!-- END name -->`, where text after the name (`: note`) is
+ *   ignored; `name` is `[A-Za-z0-9_.-]` segments joined by `:`.
+ * - `<!-- ns:name -->` ... `<!-- /ns:name -->`: the name must contain a `:` (a namespace), so
+ *   ordinary comments such as `<!-- note -->` are never taken as blocks.
  */
 const OPEN =
   /^<!--\s*(?:BEGIN\s+([A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)*)[^>]*?|([A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+))\s*-->[ \t]*$/gm;

@@ -159,15 +159,23 @@ function renderCapture(capture: CaptureResult, written: CaptureWriteResult, c: C
 
 /**
  * What the non-personal modules provide, so capture leaves it out: the union of the catalog
- * in use and the catalog in `outDir` (each only when it loads), so the result does not
- * depend on what earlier captures wrote.
+ * in use and the catalog in `outDir`, so the result does not depend on what earlier captures
+ * wrote. A catalog that does not load is reported in `warnings` (its items may be captured).
  */
-function providedBy(ctx: Context, outDir?: string): ProvidedIndex {
+function providedBy(
+  ctx: Context,
+  outDir?: string,
+): { provided: ProvidedIndex; warnings: string[] } {
   const catalogs: Catalog[] = [];
+  const warnings: string[] = [];
+  const notLoaded = (dir: string, error: unknown) =>
+    warnings.push(
+      `provides of the catalog ${dir} not loaded (${(error as Error).message}); what its modules install may be captured again`,
+    );
   try {
     catalogs.push(ctx.catalog());
-  } catch {
-    // no usable catalog in use
+  } catch (error) {
+    notLoaded(ctx.catalogPath, error);
   }
   if (
     outDir &&
@@ -176,15 +184,32 @@ function providedBy(ctx: Context, outDir?: string): ProvidedIndex {
   ) {
     try {
       catalogs.push(loadCatalog(outDir));
-    } catch {
-      // not a valid catalog: ignore it
+    } catch (error) {
+      notLoaded(outDir, error);
     }
   }
-  return collectProvided({
+  const provided = collectProvided({
     dir: "",
     modules: catalogs.flatMap((catalog) => catalog.modules),
     profiles: [],
   });
+  return { provided, warnings };
+}
+
+/** Captures with what the catalogs provide; their load problems become capture warnings. */
+function runCapture(
+  ctx: Context,
+  options: { claudeJson: string; include: CaptureKind[]; outDir?: string },
+): CaptureResult {
+  const { provided, warnings } = providedBy(ctx, options.outDir);
+  const capture = captureClaudeConfig({
+    claudeDir: ctx.claudeDir,
+    claudeJson: options.claudeJson,
+    include: options.include,
+    provided,
+  });
+  capture.warnings.unshift(...warnings);
+  return capture;
 }
 
 /** `ccc capture`: imports the current Claude config into catalog modules. */
@@ -208,8 +233,7 @@ export async function captureCommand(ctx: Context, flags: CaptureFlags): Promise
       "refusing to write captured modules without confirmation in non-interactive mode; pass --yes (or --dry-run to preview)",
     );
   }
-  const provided = providedBy(ctx, outDir);
-  const capture = captureClaudeConfig({ claudeDir: ctx.claudeDir, claudeJson, include, provided });
+  const capture = runCapture(ctx, { claudeJson, include, outDir });
   const written = writeCapture(capture, { outDir, dryRun: flags.dryRun });
   if (ctx.options.json) writeJson(captureDoc(capture, written));
   else process.stdout.write(`${renderCapture(capture, written, ctx.colors)}\n`);
@@ -223,11 +247,10 @@ async function captureTui(
   const c = ctx.colors;
   intro(c.bgCyan(c.black(" ccc capture ")));
   log.info(`Reading ${c.bold(ctx.claudeDir)} and ${c.bold(options.claudeJson)}`);
-  const capture = captureClaudeConfig({
-    claudeDir: ctx.claudeDir,
+  const capture = runCapture(ctx, {
     claudeJson: options.claudeJson,
     include: options.include,
-    provided: providedBy(ctx, options.out ? resolve(options.out) : undefined),
+    outDir: options.out ? resolve(options.out) : undefined,
   });
   if (capture.items.length === 0) {
     outro("Nothing to capture.");

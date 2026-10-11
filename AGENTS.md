@@ -73,6 +73,8 @@ Rules:
 - Before committing, show the human the `redactions` list (module, location, placeholder) and the `git diff`, and get their go-ahead. If you spot a secret that was not redacted, stop and tell them; do not commit it.
 - Output is `ccc.capture/v1`: `{ claudeDir, claudeJson, outDir, dryRun, items: [{ id, kind, source, action, files, secrets }], redactions: [{ module, location, placeholder }], skipped: [{ path, reason }], warnings, profile: { id, path, action, modules } }`. It never contains secret values.
 - Without `--yes` (and without `--dry-run`) a non-interactive capture exits `2` (`confirmation_required`).
+- `warnings` starts with any catalog whose `provides` could not be loaded (`provides of the catalog <dir> not loaded (...)`): items its modules install may then be captured again, so fix that catalog first.
+- An existing `profiles/personal.json` that is not valid JSON or has no `modules` list is never overwritten: capture exits `3` (`ccc.error/v1` code `invalid_profile`, "fix or remove it") and writes nothing.
 
 ### Exit codes
 
