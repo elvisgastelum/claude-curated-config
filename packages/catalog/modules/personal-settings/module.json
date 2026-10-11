@@ -1,0 +1,16 @@
+{
+  "id": "personal-settings",
+  "name": "Personal settings",
+  "description": "Your settings.json (permissions, env, hooks, plugins), merged on apply.",
+  "tags": [
+    "personal",
+    "settings"
+  ],
+  "steps": [
+    {
+      "type": "json-merge",
+      "src": "settings.json",
+      "dest": "settings.json"
+    }
+  ]
+}

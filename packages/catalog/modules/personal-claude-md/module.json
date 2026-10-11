@@ -1,0 +1,17 @@
+{
+  "id": "personal-claude-md",
+  "name": "Personal CLAUDE.md",
+  "description": "Your global CLAUDE.md instructions (captured); sections managed by installers are kept on apply.",
+  "tags": [
+    "personal",
+    "claude-md"
+  ],
+  "steps": [
+    {
+      "type": "file",
+      "src": "CLAUDE.md",
+      "dest": "CLAUDE.md",
+      "preserveBlocks": true
+    }
+  ]
+}
