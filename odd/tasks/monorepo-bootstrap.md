@@ -49,7 +49,7 @@ Strategy: `single-pr` (user decision 2026-10-11). Create public repo elvisgastel
 | T14 | User decisions + review 4 fixes: statusline via installer; gentle-ai-claude owns engram/codegraph MCP + hooks (engram/codegraph setup only when gentle-ai did not); core-settings in personal; pin configure-env; array-item provides; pin remote installers to commit SHAs; jq-based MCP checks on user-scope mcpServers; herdr check without SIGPIPE; capture: warn on provides load errors, never overwrite an unparseable personal profile, report skipped statusline script, fix profile action + marker docs; plus (A) KANEO_URL as a required non-secret module input, (B) capture privacy scan to `${CCC_INPUT_*}` inputs | delegated | [x] | a2ca769, 1d975a5, f389905, 0c4ea12, f93427f |
 | T15 | User decisions + review 5 fixes: inputs/secrets only for steps that will run (check first; R3-001), drop `skill-configure-env` from `personal` until published, capture drops homelab settings items (`CAPTURE_IGNORE_SETTINGS_ITEMS`, reason `homelab`), skip real-jq tests without jq (R3-002), `.local` hosts only in a host context (R3-003) | delegated | [x] | 63dd012, adc5ee7, 590a510, 90483f4, ce80994 |
 | T16 | Capture config file (`packages/catalog/capture.config.json`: ignoreSettings pointers, ignoreSettingsItems, privateDomains); drop settings strings with machine-local absolute paths (reported as skipped); ignore `/skipDangerousModePermissionPrompt`; review 6 fixes: collect inputs/secrets for steps skipped only because their bin is not installed yet, flag bare `*.local` hosts in structured JSON values | delegated | [x] | 72270d9, bd935e1, cf832d1, 66abb5a |
-| T13 | Re-run real capture dry-run, show the user, write leftover personal modules (settings + personal CLAUDE.md sections) only after approval | parent | [ ] | |
+| T13 | Re-run real capture dry-run, show the user, write leftover personal modules (settings + personal CLAUDE.md sections) only after approval | parent | [x] | see evidence |
 
 Route evidence: empty repo, 5 tasks across many non-trivial files → one bounded writer (mandatory writer trigger).
 
@@ -181,5 +181,10 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 - Verification: pnpm install 0, pnpm build 0, pnpm typecheck 0, pnpm lint 0 (73 files), pnpm test 0 (143/143); each intermediate commit was tested in isolation (135, 136, 142 tests). Capture dry-run on a scratch fixture (HOME and claude dir in the scratchpad, `--out` a scratch catalog without a config, so the bundled config applied): skipped `/skipDangerousModePermissionPrompt` (ignored by capture config) and the `/Users/someone/...` `autoMode.environment` line (machine-local path); the scratch write kept the `https://github.com/...` line and `model`.
 - Deviations: built-in defaults are empty (the values moved to the shipped config file); the lookup adds the catalog in use between `--out` and the built-ins. Engram mirror not updated by the writer (pending).
 
+## T13 evidence (2026-10-11)
+- T16 review (reliability lens) approved, acknowledged (lineage review-e8b8cdec1c04c464). Advisory follow-ups: a dropped machine-local hook can leave an empty matcher entry; inputs for missing-bin steps are collected even when no module installs that bin; docs mention literal `$HOME`.
+- Real capture (user approved write + commit): created `personal-claude-md` (Standing review consent section) and `personal-settings` (defaultMode auto, enabled plugins, agentPushNotifEnabled, autoMode environment without the machine-local trusted-repo line); `personal` profile updated. Skipped by capture config: `skipDangerousModePermissionPrompt`, `Bash(homelabctl:*)`; machine-local: 1 autoMode line. 0 redactions, 0 privacy hits; grep for home paths / private domain / danger flag in the written files: clean.
+- `pnpm test` 143/143; `plan --profile personal` on a temp dir with KANEO_URL set: create 3, run 4, unchanged 6, skip 4.
+
 ## Next step
-Parent runs the real capture (T13), commits, gets T16 + T13 reviewed and pushes to PR #1.
+Push to PR #1. Remaining advisory follow-ups listed above are optional.
