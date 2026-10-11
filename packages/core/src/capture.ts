@@ -56,6 +56,20 @@ export const CAPTURE_IGNORE: readonly string[] = [
   "skills/homelab-service-manager",
 ];
 
+/** A settings array item pattern capture leaves out, reported as skipped with `reason`. */
+export interface IgnoredSettingsItem {
+  match: RegExp;
+  reason: string;
+}
+
+/**
+ * String items of settings arrays (e.g. `/permissions/allow`) never captured: homelab
+ * tooling hints that must not go into a public catalog.
+ */
+export const CAPTURE_IGNORE_SETTINGS_ITEMS: readonly IgnoredSettingsItem[] = [
+  { match: /homelabctl/, reason: "homelab" },
+];
+
 export interface CaptureLimits {
   maxFiles: number;
   maxBytes: number;
@@ -131,6 +145,8 @@ export interface CaptureOptions {
   provided?: ProvidedIndex;
   /** Paths never captured (default {@link CAPTURE_IGNORE}). */
   ignore?: readonly string[];
+  /** Settings array items never captured (default {@link CAPTURE_IGNORE_SETTINGS_ITEMS}). */
+  ignoreSettingsItems?: readonly IgnoredSettingsItem[];
   /**
    * Domains whose host names are private infrastructure (default
    * {@link DEFAULT_PRIVATE_DOMAINS}; see `privateDomainsFromEnv` for `CCC_PRIVATE_DOMAINS`).
@@ -450,9 +466,9 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
     }
   }
   if (wanted.has("settings") && isPlainObject(settings)) {
-    const doc = withoutProvided(structuredClone(settings), provided, (path, reason) =>
-      skipped.push({ path, reason }),
-    );
+    const report = (path: string, reason: string) => skipped.push({ path, reason });
+    const doc = withoutProvided(structuredClone(settings), provided, report);
+    withoutIgnoredItems(doc, options.ignoreSettingsItems ?? CAPTURE_IGNORE_SETTINGS_ITEMS, report);
     add(
       "settings",
       "personal-settings",
@@ -690,6 +706,46 @@ function withoutProvided(
   }
   if (Object.keys(hooks).length === 0) delete doc.hooks;
   return doc;
+}
+
+/**
+ * Drops the string items of every settings array (outside `hooks`) that match an ignore
+ * pattern, reporting `settings.json <pointer> <item>` with the pattern's reason. Arrays and
+ * objects left empty are removed.
+ */
+function withoutIgnoredItems(
+  doc: Record<string, Json>,
+  ignore: readonly IgnoredSettingsItem[],
+  report: (path: string, reason: string) => void,
+): void {
+  if (ignore.length === 0) return;
+  const escapeKey = (key: string) => key.replaceAll("~", "~0").replaceAll("/", "~1");
+  /** Returns whether anything was removed below `node`. */
+  const visit = (node: Record<string, Json>, pointer: string): boolean => {
+    let removed = false;
+    for (const [key, value] of Object.entries(node)) {
+      const path = `${pointer}/${escapeKey(key)}`;
+      if (path === "/hooks") continue;
+      if (Array.isArray(value)) {
+        const kept = value.filter((item) => {
+          if (typeof item !== "string") return true;
+          // search() ignores lastIndex, so global patterns behave too.
+          const hit = ignore.find((entry) => item.search(entry.match) !== -1);
+          if (hit) report(`settings.json ${path} ${item}`, hit.reason);
+          return !hit;
+        });
+        if (kept.length === value.length) continue;
+        removed = true;
+        if (kept.length > 0) node[key] = kept;
+        else delete node[key];
+      } else if (isPlainObject(value) && visit(value, path)) {
+        removed = true;
+        if (Object.keys(value).length === 0) delete node[key];
+      }
+    }
+    return removed;
+  };
+  visit(doc, "");
 }
 
 function statSafe(path: string) {

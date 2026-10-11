@@ -70,7 +70,7 @@ git -C <repo> diff --stat && git -C <repo> diff   # 3. review
 
 Rules:
 
-- Capture skips whatever the catalog's installer modules `provide` (reported in `skipped` as `provided by <module>`), plus `skills/synced` and `skills/homelab-service-manager`. Do not hand-copy those items into personal modules.
+- Capture skips whatever the catalog's installer modules `provide` (reported in `skipped` as `provided by <module>`), plus `skills/synced`, `skills/homelab-service-manager` and homelab settings items such as `Bash(homelabctl:*)` (reason `homelab`). Do not hand-copy those items into personal modules.
 - Pass `--out <your clone>/packages/catalog` so the modules land in the git checkout you will commit from. Without `--out`, capture exits `2` (`ccc.error/v1` code `out_required`) when the catalog in use is the installer's checkout (`$CCC_HOME`, default `~/.local/share/claude-curated-config`) or is not inside a git checkout.
 - `privacy` lists private infrastructure that was replaced with `${CCC_INPUT_*}` placeholders (declared as module `inputs`): host names under the domains in `CCC_PRIVATE_DOMAINS` (comma-separated; default `elvisgastelum.com`), `*.ts.net` and `*.local` hosts, and private IPv4 addresses (10/8, 172.16/12, 192.168/16, 100.64/10). Set `CCC_PRIVATE_DOMAINS` to your own domains before capturing.
 - Before committing, show the human the `redactions` and `privacy` lists (module, location, placeholder) and the `git diff`, and get their go-ahead. If you spot a secret that was not redacted, stop and tell them; do not commit it.

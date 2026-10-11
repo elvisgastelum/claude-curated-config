@@ -9,11 +9,13 @@ export type {
   CaptureResult,
   CaptureSkip,
   CaptureWriteResult,
+  IgnoredSettingsItem,
   WriteAction,
   WriteCaptureOptions,
 } from "./capture";
 export {
   CAPTURE_IGNORE,
+  CAPTURE_IGNORE_SETTINGS_ITEMS,
   CAPTURE_KINDS,
   captureClaudeConfig,
   DEFAULT_CAPTURE_LIMITS,

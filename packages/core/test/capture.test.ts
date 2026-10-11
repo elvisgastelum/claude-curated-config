@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   apply,
+  CAPTURE_IGNORE_SETTINGS_ITEMS,
   captureClaudeConfig,
   findSecrets,
   loadCatalog,
@@ -399,6 +400,52 @@ describe("capture review 4", () => {
     expect(writeCapture(capture, { outDir: out, dryRun: true }).profile.action).toBe("update");
     expect(writeCapture(capture, { outDir: out }).profile.action).toBe("update");
     expect(writeCapture(capture, { outDir: out }).profile.action).toBe("unchanged");
+  });
+});
+
+describe("ignored settings items", () => {
+  const capture = (ignoreSettingsItems?: { match: RegExp; reason: string }[]) => {
+    const claudeDir = tempDir();
+    writeFileSync(
+      join(claudeDir, "settings.json"),
+      JSON.stringify({
+        permissions: {
+          allow: ["Bash(homelabctl:*)", "Bash(ls:*)"],
+          ask: ["Bash(homelabctl deploy:*)"],
+        },
+      }),
+    );
+    return captureClaudeConfig({
+      claudeDir,
+      claudeJson: join(claudeDir, "none.json"),
+      include: ["settings"],
+      ...(ignoreSettingsItems ? { ignoreSettingsItems } : {}),
+    });
+  };
+  const settingsOf = (result: ReturnType<typeof captureClaudeConfig>) =>
+    JSON.parse(result.items[0]?.files[0]?.content.toString("utf8") ?? "{}");
+
+  it("drops homelab permission items by default and reports them as skipped", () => {
+    expect(CAPTURE_IGNORE_SETTINGS_ITEMS.map((entry) => entry.reason)).toContain("homelab");
+    const result = capture();
+    expect(settingsOf(result)).toEqual({ permissions: { allow: ["Bash(ls:*)"] } });
+    expect(result.skipped).toEqual(
+      expect.arrayContaining([
+        { path: "settings.json /permissions/allow Bash(homelabctl:*)", reason: "homelab" },
+        { path: "settings.json /permissions/ask Bash(homelabctl deploy:*)", reason: "homelab" },
+      ]),
+    );
+  });
+
+  it("takes a custom pattern list", () => {
+    const kept = capture([]);
+    expect(settingsOf(kept).permissions.allow).toContain("Bash(homelabctl:*)");
+    const custom = capture([{ match: /\bls:/, reason: "noise" }]);
+    expect(settingsOf(custom).permissions.allow).toEqual(["Bash(homelabctl:*)"]);
+    expect(custom.skipped).toContainEqual({
+      path: "settings.json /permissions/allow Bash(ls:*)",
+      reason: "noise",
+    });
   });
 });
 
