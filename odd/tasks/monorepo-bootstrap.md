@@ -51,5 +51,16 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 - T5: install.sh + README.md + AGENTS.md + CLAUDE.md (`@AGENTS.md`). Test-first exception: shell installer and docs have no runnable RED; checked functionally instead. `bash -n install.sh`: ok; shellcheck not installed (skipped). Installer exercised end-to-end with `CCC_REPO=<local checkout> CCC_REF=feat/monorepo-bootstrap CCC_HOME/CCC_BIN_DIR=<tmp>` piped through `bash -s -- --cli apply --profile minimal --yes --json --claude-dir <tmp>`: exit 0, stdout is a clean `ccc.apply/v1` doc (installer logs on stderr), wrapper written; re-run with `CCC_NO_RUN=1` updates via `git pull --ff-only`; missing node prints a fix hint and exits 1. Additions beyond the design: `CCC_BIN_DIR`, `CCC_NO_RUN`, `corepack pnpm` fallback when `corepack enable` lacks permissions, colors only on a TTY.
 - Final verification: pnpm install 0, pnpm build 0, pnpm typecheck 0, pnpm lint 0, pnpm test 0 (37/37), manual apply minimal twice into $TMPDIR/ccc-check (done 2, then unchanged 2, exit 0 both), non-TTY apply without --yes exit 2.
 
+- Parent spot check: `pnpm test` → 37/37 passed. `.atl/` (local skill registry) added to `.gitignore` (chore commit) so the review candidate has no untracked files.
+- Native review (RDD on, risk high: install.sh executable + shell process): standing consent granted, four lenses, **approved**, acknowledged (lineage review-ebece59909012874, authority burned). No blocking findings.
+
+## Follow-ups (advisory review findings, not yet scheduled)
+- R1: `core-settings` deny rules are `./`-anchored; use `**/.env`, `**/.env.*`, `**/secrets/**`.
+- R1: pin `@upstash/context7-mcp` version in `mcp-context7`.
+- R3: backups can collide on the same timestamp; dry-run hides `blocked` steps; an evaluate throw aborts the whole apply; blocked path untested; CLI tests may run a stale `dist`.
+- R4: dangling symlink at dest crashes evaluate; settings writes are not atomic (write temp + rename); installer has no rollback on failed build; apply abort loses the partial report.
+- R2: backup docstring says "moved" vs copied; duplicated min-node constant and pending-count logic.
+- Product: explicit profile order (minimal first in TUI); decide json-merge conflict rule (catalog wins vs keep user value); `ccc capture` to import the current `~/.claude` into the catalog.
+
 ## Next step
 All tasks done on `feat/monorepo-bootstrap`. Forecast exceeded ~400 lines: ask for the chain strategy (`stacked-to-main` or `feature-branch-chain`) before opening PRs. Push/PR are user decisions.
