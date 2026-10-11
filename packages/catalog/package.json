@@ -19,7 +19,8 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "bump-installers": "node scripts/bump-installers.mjs"
   },
   "devDependencies": {
     "@claude-curated/core": "workspace:*"

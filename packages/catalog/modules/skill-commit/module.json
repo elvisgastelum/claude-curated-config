@@ -1,7 +1,7 @@
 {
   "id": "skill-commit",
   "name": "Commit skill",
-  "description": "Runs the claude-commit-skill installer (github.com/elvisgastelum/claude-commit-skill): a title-only Conventional Commit skill, a commit-guard PreToolUse hook that blocks AI attribution, the attribution/includeCoAuthoredBy settings and a managed CLAUDE.md block. Needs bash, curl and jq.",
+  "description": "Runs the claude-commit-skill installer (github.com/elvisgastelum/claude-commit-skill): a title-only Conventional Commit skill, a commit-guard PreToolUse hook that blocks AI attribution, the attribution/includeCoAuthoredBy settings and a managed CLAUDE.md block. Pinned to a commit (see `pnpm --filter @claude-curated/catalog bump-installers`). Needs bash, curl and jq.",
   "tags": ["skills", "git", "installer"],
   "provides": {
     "paths": ["skills/commit", "hooks/commit-guard.sh"],
@@ -12,12 +12,13 @@
   "steps": [
     {
       "type": "command",
-      "shell": "curl -fsSL https://raw.githubusercontent.com/elvisgastelum/claude-commit-skill/main/install.sh | bash",
+      "shell": "curl -fsSL https://raw.githubusercontent.com/elvisgastelum/claude-commit-skill/907ccc9d81030a2af21dd68d66139f8373c6d22f/install.sh | bash",
       "env": {
-        "CLAUDE_DIR": "${CCC_CLAUDE_DIR}"
+        "CLAUDE_DIR": "${CCC_CLAUDE_DIR}",
+        "REF": "907ccc9d81030a2af21dd68d66139f8373c6d22f"
       },
       "checkShell": "test -f \"$CCC_CLAUDE_DIR/skills/commit/SKILL.md\" && test -f \"$CCC_CLAUDE_DIR/hooks/commit-guard.sh\" && grep -q 'BEGIN claude-commit-skill' \"$CCC_CLAUDE_DIR/CLAUDE.md\"",
-      "requiresBin": "curl"
+      "requiresBin": ["curl", "jq"]
     }
   ]
 }

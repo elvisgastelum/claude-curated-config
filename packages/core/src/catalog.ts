@@ -107,8 +107,12 @@ function validateStep(raw: unknown, moduleDir: string, where: string): Step {
       ) {
         fail("checkShell must be a non-empty string");
       }
-      if (raw.requiresBin !== undefined && typeof raw.requiresBin !== "string") {
-        fail("requiresBin must be a string");
+      if (
+        raw.requiresBin !== undefined &&
+        typeof raw.requiresBin !== "string" &&
+        !(isStringArray(raw.requiresBin) && raw.requiresBin.length > 0)
+      ) {
+        fail("requiresBin must be a string or a non-empty list of strings");
       }
       if (
         raw.os !== undefined &&

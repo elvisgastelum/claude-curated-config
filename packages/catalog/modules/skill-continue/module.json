@@ -1,7 +1,7 @@
 {
   "id": "skill-continue",
   "name": "Continue skill",
-  "description": "Runs the claude-continue-skill installer (github.com/elvisgastelum/claude-continue-skill): adds the continue skill. Needs bash and curl.",
+  "description": "Runs the claude-continue-skill installer (github.com/elvisgastelum/claude-continue-skill): adds the continue skill. Pinned to a commit. Needs bash and curl.",
   "tags": ["skills", "installer"],
   "provides": {
     "paths": ["skills/continue"]
@@ -9,9 +9,10 @@
   "steps": [
     {
       "type": "command",
-      "shell": "curl -fsSL https://raw.githubusercontent.com/elvisgastelum/claude-continue-skill/main/install.sh | bash",
+      "shell": "curl -fsSL https://raw.githubusercontent.com/elvisgastelum/claude-continue-skill/2577b09481387a018719fd8c107d67a9dea6490f/install.sh | bash",
       "env": {
-        "CLAUDE_DIR": "${CCC_CLAUDE_DIR}"
+        "CLAUDE_DIR": "${CCC_CLAUDE_DIR}",
+        "REF": "2577b09481387a018719fd8c107d67a9dea6490f"
       },
       "checkShell": "test -f \"$CCC_CLAUDE_DIR/skills/continue/SKILL.md\"",
       "requiresBin": "curl"

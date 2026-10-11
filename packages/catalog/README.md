@@ -88,7 +88,9 @@ Rules:
 
 - `dest` must stay inside the Claude dir (no absolute paths, no `..`); the loader rejects anything else.
 - Never put secrets, tokens or machine-specific paths in the catalog.
-- Pin package versions in `command` steps (e.g. `npx -y pkg@1.2.3`) so every machine gets the same thing.
+- Pin package versions in `command` steps (e.g. `npx -y pkg@1.2.3`) so every machine gets the same thing. Pin remote installer URLs to a commit SHA (`raw.githubusercontent.com/<owner>/<repo>/<sha>/install.sh`) and pass the same SHA as the installer's ref variable (`REF`); `pnpm bump-installers` (dry by default, `--write` to apply) moves them to the latest commit.
+- Check JSON state with `jq` on the exact key (`jq -e '.mcpServers.<name> != null' "$CCC_CLAUDE_JSON"`), never with a `grep` of the whole file, and list `jq` in `requiresBin` (a string or a list; every binary must be on `PATH`).
+- Under `pipefail`, `tool | grep -q` can fail with SIGPIPE when grep exits early: capture the output first (`out=$(tool) && grep -q x <<<"$out"`).
 - Permission rules for paths should use `**/` globs (`Read(**/.env)`) so they match at any depth; `./` only matches the project root.
 - Give every `command` step a `check` or `checkShell` so re-running is idempotent, and a `requiresBin` so a missing prerequisite skips the step instead of failing it.
 - Prefer the upstream installer of a tool over a snapshot of its files, and declare what it writes under `provides`.

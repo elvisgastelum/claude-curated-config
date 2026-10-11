@@ -12,7 +12,7 @@
     {
       "type": "command",
       "run": ["herdr", "integration", "install", "claude"],
-      "checkShell": "herdr integration status | grep -q '^claude: current'",
+      "checkShell": "status=$(herdr integration status 2>/dev/null) && grep -q '^claude: current' <<<\"$status\"",
       "requiresBin": "herdr",
       "globalOnly": true
     }

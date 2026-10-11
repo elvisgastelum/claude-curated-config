@@ -1,8 +1,14 @@
 {
   "id": "skill-kaneo",
   "name": "Kaneo work tracking skill",
-  "description": "Runs the kaneo-work-tracking-skill installer: the kaneo-work-tracking skill, a managed CLAUDE.md block and the kaneo HTTP MCP server in .claude.json. Uses $KANEO_URL (default https://kaneo.example.com). Needs bash, curl and jq.",
+  "description": "Runs the kaneo-work-tracking-skill installer (pinned to a commit): the kaneo-work-tracking skill, a managed CLAUDE.md block and the kaneo HTTP MCP server in .claude.json. Asks for KANEO_URL, the base URL of your Kaneo instance (no default; env var KANEO_URL in --cli mode). Needs bash, curl and jq.",
   "tags": ["skills", "kaneo", "mcp", "installer"],
+  "inputs": [
+    {
+      "name": "KANEO_URL",
+      "description": "Base URL of your Kaneo instance (e.g. https://kaneo.example.com)"
+    }
+  ],
   "provides": {
     "paths": ["skills/kaneo-work-tracking"],
     "claudeMdBlocks": ["kaneo-work-tracking-skill"],
@@ -11,14 +17,15 @@
   "steps": [
     {
       "type": "command",
-      "shell": "curl -fsSL https://raw.githubusercontent.com/elvisgastelum/kaneo-work-tracking-skill/main/install.sh | bash",
+      "shell": "curl -fsSL https://raw.githubusercontent.com/elvisgastelum/kaneo-work-tracking-skill/134214c49e1b72ebbbeb7c81c4de2a7f233d9541/install.sh | bash",
       "env": {
         "CLAUDE_DIR": "${CCC_CLAUDE_DIR}",
         "CLAUDE_JSON": "${CCC_CLAUDE_JSON}",
-        "KANEO_URL": "${KANEO_URL:-https://kaneo.example.com}"
+        "KANEO_URL": "${KANEO_URL}",
+        "REF": "134214c49e1b72ebbbeb7c81c4de2a7f233d9541"
       },
-      "checkShell": "test -f \"$CCC_CLAUDE_DIR/skills/kaneo-work-tracking/SKILL.md\" && grep -q '\"kaneo\"' \"$CCC_CLAUDE_JSON\"",
-      "requiresBin": "curl"
+      "checkShell": "test -f \"$CCC_CLAUDE_DIR/skills/kaneo-work-tracking/SKILL.md\" && jq -e '.mcpServers.kaneo != null' \"$CCC_CLAUDE_JSON\" >/dev/null 2>&1",
+      "requiresBin": ["curl", "jq"]
     }
   ]
 }

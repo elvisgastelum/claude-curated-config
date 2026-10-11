@@ -566,11 +566,15 @@ describe("ccc --cli", () => {
   });
 });
 
+/** Shell snippet: adds user-scope MCP server `$1` (with url `$2`) to `$3` (a JSON file) with jq. */
+const ADD_SERVER = `add_server() { f="$3"; [ -s "$f" ] || echo '{}' > "$f"; jq --arg n "$1" --arg u "$2" '.mcpServers[$n] = {url: $u}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; }`;
+
 /** Fake tool scripts: each records its argv in `log`, then simulates what the real tool does. */
 const TOOL_FAKES: Record<string, string> = {
-  "gentle-ai": `if [ "$1" = install ]; then mkdir -p "$HOME/.gentle-ai"; echo '{"installed_agents":["claude-code"]}' > "$HOME/.gentle-ai/state.json"; fi`,
-  engram: `if [ "$1" = setup ]; then echo '"engram"' >> "$HOME/.claude.json"; fi`,
-  codegraph: `if [ "$1" = install ]; then echo '"codegraph"' >> "$HOME/.claude.json"; fi`,
+  // gentle-ai's engram component registers the engram MCP server, so engram setup never runs.
+  "gentle-ai": `${ADD_SERVER}\nif [ "$1" = install ]; then mkdir -p "$HOME/.gentle-ai"; echo '{"installed_agents":["claude-code"]}' > "$HOME/.gentle-ai/state.json"; add_server engram x "$HOME/.claude.json"; fi`,
+  engram: `${ADD_SERVER}\nif [ "$1" = setup ]; then add_server engram x "$HOME/.claude.json"; fi`,
+  codegraph: `${ADD_SERVER}\nif [ "$1" = install ]; then add_server codegraph x "$HOME/.claude.json"; fi`,
   herdr: [
     `case "$1 $2" in`,
     `  "integration install") touch "$HOME/.herdr-claude" ;;`,
@@ -584,9 +588,10 @@ const TOOL_FAKES: Record<string, string> = {
 const CURL_FAKE = [
   `case "$*" in`,
   `  *claude-commit-skill*) echo 'mkdir -p "$CLAUDE_DIR/skills/commit" "$CLAUDE_DIR/hooks" && touch "$CLAUDE_DIR/skills/commit/SKILL.md" "$CLAUDE_DIR/hooks/commit-guard.sh" && printf "<!-- BEGIN claude-commit-skill -->\\nno ai\\n<!-- END claude-commit-skill -->\\n" >> "$CLAUDE_DIR/CLAUDE.md"' ;;`,
-  `  *kaneo-work-tracking-skill*) echo 'mkdir -p "$CLAUDE_DIR/skills/kaneo-work-tracking" && touch "$CLAUDE_DIR/skills/kaneo-work-tracking/SKILL.md" && echo "\\"kaneo\\" $KANEO_URL" >> "$CLAUDE_JSON"' ;;`,
+  `  *kaneo-work-tracking-skill*) echo '${ADD_SERVER.replaceAll("'", "'\\''")}; mkdir -p "$CLAUDE_DIR/skills/kaneo-work-tracking" && touch "$CLAUDE_DIR/skills/kaneo-work-tracking/SKILL.md" && add_server kaneo "$KANEO_URL $REF" "$CLAUDE_JSON"' ;;`,
   `  *claude-continue-skill*) echo 'mkdir -p "$CLAUDE_DIR/skills/continue" && touch "$CLAUDE_DIR/skills/continue/SKILL.md"' ;;`,
-  `  *claude-statusline*) echo 'touch "$CLAUDE_CONFIG_DIR/statusline.sh" && echo "{\\"statusLine\\":{\\"command\\":\\"bash statusline.sh\\"}}" > "$CLAUDE_CONFIG_DIR/settings.json"' ;;`,
+  // Like the real installer, merges statusLine into settings.json with jq.
+  `  *claude-statusline*) echo 'touch "$CLAUDE_CONFIG_DIR/statusline.sh" && f="$CLAUDE_CONFIG_DIR/settings.json" && { [ -s "$f" ] || echo "{}" > "$f"; } && jq ".statusLine = {command: \\"bash statusline.sh\\"}" "$f" > "$f.tmp" && mv "$f.tmp" "$f"' ;;`,
   `  *herdr-config*) echo 'mkdir -p "$HOME/.local/bin" && printf "#!/bin/sh\\n" > "$HOME/.local/bin/herdr-config" && chmod +x "$HOME/.local/bin/herdr-config"' ;;`,
   "esac",
 ].join("\n");
@@ -639,9 +644,9 @@ describe("personal profile with fake installers", () => {
     expect(at("brew install gentleman-programming/tap/gentle-ai")).toBeLessThan(
       at("gentle-ai install --agent claude-code --scope global --preset full-gentleman"),
     );
-    expect(at("brew install gentleman-programming/tap/engram")).toBeLessThan(
-      at("engram setup claude-code"),
-    );
+    at("brew install gentleman-programming/tap/engram");
+    // gentle-ai registered engram first, so the fallback setup was not needed.
+    expect(calls.some((call) => call.startsWith("engram setup"))).toBe(false);
     expect(at("npm install -g @colbymchenry/codegraph@1.6.0")).toBeLessThan(
       at("codegraph install --yes --target claude --location global"),
     );
@@ -653,7 +658,8 @@ describe("personal profile with fake installers", () => {
       "claude-statusline",
       "herdr-config",
     ]) {
-      at(`curl -fsSL ${RAW}/${repo}/main/install.sh`);
+      const call = calls[at(`curl -fsSL ${RAW}/${repo}/`)] ?? "";
+      expect(call, repo).toMatch(new RegExp(`/${repo}/[0-9a-f]{40}/install\\.sh$`));
     }
     at("npx -y @elvisgastelum/configure-env install skill --ci --scope user --mode copy");
 
@@ -661,9 +667,10 @@ describe("personal profile with fake installers", () => {
     const claudeDir = join(home, ".claude");
     expect(existsSync(join(claudeDir, "skills/commit/SKILL.md"))).toBe(true);
     expect(existsSync(join(claudeDir, "statusline.sh"))).toBe(true);
-    expect(readFileSync(join(home, ".claude.json"), "utf8")).toContain(
-      '"kaneo" https://kaneo.test',
-    );
+    const servers = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")).mcpServers;
+    expect(Object.keys(servers).sort()).toEqual(["codegraph", "engram", "kaneo"]);
+    // The Kaneo URL came from the KANEO_URL input, REF from the pinned commit.
+    expect(servers.kaneo.url).toMatch(/^https:\/\/kaneo\.test [0-9a-f]{40}$/);
 
     const doc = first.json();
     const context7 = (doc.modules as { id: string; steps: { status: string }[] }[]).find(
@@ -674,6 +681,12 @@ describe("personal profile with fake installers", () => {
     const before = calls.length;
     const second = ccc(args, env);
     expect(second.code).toBe(0);
+    const done = (
+      second.json().modules as { id: string; steps: { status: string; message: string }[] }[]
+    ).flatMap((m) =>
+      m.steps.filter((s) => s.status === "done").map((s) => `${m.id}: ${s.message}`),
+    );
+    expect(done).toEqual([]);
     expect(new Set(statuses(second.json()))).toEqual(new Set(["unchanged", "skipped"]));
     const again = readFileSync(log, "utf8").trim().split("\n").slice(before);
     expect(again.every((call) => call === "herdr integration status")).toBe(true);

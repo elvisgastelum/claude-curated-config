@@ -366,8 +366,9 @@ function evaluateCommand(
       summary,
     };
   }
-  if (step.requiresBin && !which(step.requiresBin, env)) {
-    return { action: "skip", reason: `"${step.requiresBin}" not found on PATH`, summary };
+  const missingBin = [step.requiresBin ?? []].flat().find((bin) => !which(bin, env));
+  if (missingBin) {
+    return { action: "skip", reason: `"${missingBin}" not found on PATH`, summary };
   }
   const runEnv = commandEnv(step, mod, ctx);
   const argv =

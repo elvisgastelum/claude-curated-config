@@ -678,3 +678,23 @@ describe("module inputs", () => {
     expect(readFileSync(join(claudeDir, "notes.md"), "utf8")).toBe("host: box.example.test\n");
   });
 });
+
+describe("requiresBin lists", () => {
+  it("skips a step when any listed binary is missing, naming it", () => {
+    const load = (requiresBin: unknown) =>
+      loadCatalog(
+        writeCatalog([{ id: "m", steps: [{ type: "command", run: ["true"], requiresBin }] }]),
+      );
+    expect(() => load(["jq", 1])).toThrow(/requiresBin/);
+    expect(() => load([])).toThrow(/requiresBin/);
+    const env = fakeBin({ toola: "exit 0" });
+    const step = (requiresBin: unknown) =>
+      plan({ catalog: load(requiresBin), claudeDir: tempDir(), modules: ["m"], env }).modules[0]
+        ?.steps[0];
+    expect(step(["toola", "missing-jq"])).toMatchObject({
+      action: "skip",
+      reason: '"missing-jq" not found on PATH',
+    });
+    expect(step(["toola"])?.action).toBe("run");
+  });
+});

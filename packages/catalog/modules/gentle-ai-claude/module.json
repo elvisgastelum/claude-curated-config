@@ -1,7 +1,7 @@
 {
   "id": "gentle-ai-claude",
   "name": "gentle-ai for Claude Code",
-  "description": "Runs `gentle-ai install --agent claude-code --scope global --preset full-gentleman` once (skipped when ~/.gentle-ai/state.json already lists claude-code): SDD/review/judgment-day agents, gentle-sdd commands, its skills, the gentleman theme and output style, its settings hooks and managed CLAUDE.md sections. Writes to ~/.claude only. Run `gentle-ai sync` later to update.",
+  "description": "Runs `gentle-ai install --agent claude-code --scope global --preset full-gentleman` once (skipped when ~/.gentle-ai/state.json lists claude-code in installed_agents): SDD/review/judgment-day agents, gentle-sdd commands, its skills, the gentleman theme and output style, the engram MCP server, its permission deny rules, its settings hooks and managed CLAUDE.md sections. Writes to ~/.claude and ~/.claude.json. Run `gentle-ai sync` later to update. Needs jq.",
   "tags": ["gentle-ai", "agents", "skills", "installer"],
   "requires": ["tool-gentle-ai"],
   "provides": {
@@ -33,9 +33,41 @@
       "skills/systemic-issue-triage",
       "skills/work-unit-commits"
     ],
-    "settings": ["/theme"],
+    "settings": [
+      "/theme",
+      {
+        "pointer": "/permissions/deny",
+        "items": [
+          "Bash(rm -rf /)",
+          "Bash(sudo rm -rf /)",
+          "Bash(rm -rf ~)",
+          "Bash(sudo rm -rf ~)",
+          "Read(.env)",
+          "Read(.env.*)",
+          "Edit(.env)",
+          "Edit(.env.*)",
+          "Read(.ssh/*)",
+          "Edit(.ssh/*)",
+          "Read(.credentials/*)",
+          "Edit(.credentials/*)",
+          "Read(Library/Keychains/*)",
+          "Edit(Library/Keychains/*)",
+          "Read(.aws/credentials)",
+          "Edit(.aws/credentials)",
+          "Read(.config/gh/hosts.yml)",
+          "Edit(.config/gh/hosts.yml)",
+          "Read(**/*.pem)",
+          "Edit(**/*.pem)",
+          "Read(**/*.key)",
+          "Edit(**/*.key)",
+          "Read(**/secrets/*)",
+          "Edit(**/secrets/*)"
+        ]
+      }
+    ],
     "hooks": ["gentle-ai "],
-    "claudeMdBlocks": ["gentle-ai:*"]
+    "claudeMdBlocks": ["gentle-ai:*"],
+    "mcpServers": ["engram"]
   },
   "steps": [
     {
@@ -50,8 +82,8 @@
         "--preset",
         "full-gentleman"
       ],
-      "checkShell": "grep -q '\"claude-code\"' \"$HOME/.gentle-ai/state.json\"",
-      "requiresBin": "gentle-ai",
+      "checkShell": "jq -e '(.installed_agents // []) | index(\"claude-code\") != null' \"$HOME/.gentle-ai/state.json\" >/dev/null 2>&1",
+      "requiresBin": ["gentle-ai", "jq"],
       "globalOnly": true
     }
   ]

@@ -102,9 +102,6 @@ describe("seed catalog", () => {
       "--preset",
       "full-gentleman",
     ]);
-    expect(commands("skill-kaneo")[0]?.env?.KANEO_URL).toBe(
-      `\${KANEO_URL:-https://kaneo.example.com}`,
-    );
   });
 
   it("declares what installer modules provide", () => {
@@ -118,12 +115,14 @@ describe("seed catalog", () => {
     expect(owner("settings", "/includeCoAuthoredBy")).toBe("skill-commit");
     expect(owner("mcpServers", "kaneo")).toBe("skill-kaneo");
     expect(owner("mcpServers", "codegraph")).toBe("codegraph-claude");
-    expect(owner("mcpServers", "engram")).toBe("engram-claude");
+    expect(owner("mcpServers", "engram")).toBe("gentle-ai-claude");
     expect(owner("mcpServers", "context7")).toBe("mcp-context7");
     expect(owner("hooks", "herdr-agent-state.sh")).toBe("herdr-claude");
     expect(owner("paths", "skills/sdd-*")).toBe("gentle-ai-claude");
+    // herdr-config writes outside the Claude dir; engram-claude is a fallback for what
+    // gentle-ai-claude provides.
     for (const id of [...INSTALLERS, ...Object.keys(SETUPS)].filter(
-      (id) => id !== "herdr-config",
+      (id) => id !== "herdr-config" && id !== "engram-claude",
     )) {
       expect(byId.get(id)?.provides, id).toBeTruthy();
     }

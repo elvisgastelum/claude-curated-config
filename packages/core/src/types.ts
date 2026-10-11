@@ -46,7 +46,8 @@ export interface CommandStep {
   /** At most one of `check` (argv) and `checkShell` (bash script). */
   check?: string[];
   checkShell?: string;
-  requiresBin?: string;
+  /** Binaries that must be on PATH (all of them), else the step is skipped. */
+  requiresBin?: string | string[];
   os?: StepOs[];
   env?: Record<string, string>;
   /** Let the step use the terminal when the caller is interactive (TUI). */

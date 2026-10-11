@@ -1,19 +1,25 @@
 {
   "id": "codegraph-claude",
   "name": "CodeGraph for Claude Code",
-  "description": "Runs `codegraph install --yes --target claude --location global`: registers the codegraph MCP server (and its auto-allow permissions) unless .claude.json already has it. Writes to ~/.claude.json only.",
+  "description": "Runs `codegraph install --yes --target claude --location global`: registers the codegraph MCP server, its `codegraph prompt-hook` UserPromptSubmit hook and the `mcp__codegraph__*` auto-allow permission, unless ~/.claude.json already has a user-scope codegraph MCP server (gentle-ai does not set codegraph up for Claude Code). Needs jq.",
   "tags": ["codegraph", "mcp", "installer"],
   "requires": ["tool-codegraph"],
   "provides": {
-    "mcpServers": ["codegraph"],
-    "hooks": ["codegraph prompt-hook"]
+    "settings": [
+      {
+        "pointer": "/permissions/allow",
+        "match": ["mcp__codegraph__*"]
+      }
+    ],
+    "hooks": ["codegraph prompt-hook"],
+    "mcpServers": ["codegraph"]
   },
   "steps": [
     {
       "type": "command",
       "run": ["codegraph", "install", "--yes", "--target", "claude", "--location", "global"],
-      "checkShell": "grep -q '\"codegraph\"' \"$CCC_CLAUDE_JSON\"",
-      "requiresBin": "codegraph",
+      "checkShell": "jq -e '.mcpServers.codegraph != null' \"$CCC_CLAUDE_JSON\" >/dev/null 2>&1",
+      "requiresBin": ["codegraph", "jq"],
       "globalOnly": true
     }
   ]

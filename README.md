@@ -59,13 +59,13 @@ Exit codes: `0` ok, `1` a step failed (or, with `--dry-run`, would fail), `2` us
 |---------|---------|
 | `minimal` | `core-settings`, `global-instructions` |
 | `full` | a generic public setup: `core-settings`, `global-instructions`, `skill-commit`, `mcp-context7` |
-| `personal` | the maintainer's machine: every tool and installer module below plus `mcp-context7`; `ccc capture` appends `personal-*` modules for what is left |
+| `personal` | the maintainer's machine: `core-settings`, every tool and installer module below plus `mcp-context7` (asks for `KANEO_URL`); `ccc capture` appends `personal-*` modules for what is left |
 
 Profiles are listed in the TUI and `ccc list` by their `order` field (lowest first).
 
 ### Installers and tools
 
-Most modules run the upstream installer of a tool or skill instead of copying a snapshot, so every machine gets the current version. Each one has a check (it runs only when the thing is missing) and declares what it `provides`, so `ccc capture` does not duplicate it.
+Most modules run the upstream installer of a tool or skill instead of copying a snapshot. Remote installers are pinned to a commit (see [Installer pins](#installer-pins)), so every machine runs the same reviewed script. Each one has a check (it runs only when the thing is missing) and declares what it `provides`, so `ccc capture` does not duplicate it.
 
 - Platforms: macOS and Linux. Tool installs use Homebrew (`brew`, also Homebrew on Linux) or `npm`; without them the step is skipped with a reason. Other systems skip them.
 - Prerequisites (`ccc doctor` checks them, all optional): `bash`, `curl`, `jq`, `npm`/`npx`, and `brew` on macOS.
@@ -78,17 +78,39 @@ Most modules run the upstream installer of a tool or skill instead of copying a 
 | `global-instructions` | A starter `CLAUDE.md` with personal rules. Edit it after installing. |
 | `skill-commit` | Runs the [claude-commit-skill](https://github.com/elvisgastelum/claude-commit-skill) installer: title-only commit skill, commit-guard hook, attribution settings, a managed CLAUDE.md block. |
 | `mcp-context7` | Registers the Context7 MCP server (`@upstash/context7-mcp`, pinned version) with `claude mcp add --scope user` (skipped if `claude` is not installed). |
-| `skill-kaneo` | Runs the kaneo-work-tracking-skill installer (skill, CLAUDE.md block, `kaneo` MCP server; `$KANEO_URL`, default `https://kaneo.example.com`). |
+| `skill-kaneo` | Runs the kaneo-work-tracking-skill installer (skill, CLAUDE.md block, `kaneo` MCP server). Needs the input `KANEO_URL`, your Kaneo base URL: asked in the TUI, read from the `KANEO_URL` env var in `--cli` mode (exit `2` `inputs_missing` without it). |
 | `skill-continue` | Runs the claude-continue-skill installer (`skills/continue`). |
 | `skill-configure-env` | `npx @elvisgastelum/configure-env install skill ...` (Node >= 22). |
 | `statusline` | Runs the claude-statusline installer (`statusline.sh` + `statusLine` setting; replaces an existing one). |
 | `tool-gentle-ai`, `tool-engram`, `tool-herdr` | `brew install` the tool when it is not on `PATH`. |
 | `tool-codegraph` | `npm install -g @colbymchenry/codegraph@1.6.0` when `codegraph` is not on `PATH`. |
-| `gentle-ai-claude` | `gentle-ai install --agent claude-code --scope global --preset full-gentleman` (once). |
-| `engram-claude` | `engram setup claude-code`. |
-| `codegraph-claude` | `codegraph install --yes --target claude --location global`. |
-| `herdr-claude` | `herdr integration install claude`. |
+| `gentle-ai-claude` | `gentle-ai install --agent claude-code --scope global --preset full-gentleman` (once; checked with `jq` on `installed_agents` in `~/.gentle-ai/state.json`). It also registers the engram MCP server and its permission deny rules. |
+| `engram-claude` | `engram setup claude-code`, only when `~/.claude.json` still has no user-scope `engram` MCP server after `gentle-ai-claude`. |
+| `codegraph-claude` | `codegraph install --yes --target claude --location global` (MCP server, prompt hook, `mcp__codegraph__*` auto-allow), unless a user-scope `codegraph` MCP server exists. |
+| `herdr-claude` | `herdr integration install claude`, unless `herdr integration status` reports `claude: current`. |
 | `herdr-config` | Runs the herdr-config installer, which writes outside the Claude dir (`~/.config/herdr`, `~/.local/bin/herdr-config`, `~/.agents/skills/herdr-config`). |
+
+MCP checks read the user-scope `.mcpServers.<name>` of `~/.claude.json` with `jq` (a project-scope server does not count), so those modules also need `jq`.
+
+### Installer pins
+
+Every `curl ... | bash` installer URL names a commit SHA, and the step passes the same commit as `REF` (or `CLAUDE_STATUSLINE_RAW_URL` for the status line) so the files the installer downloads come from that commit too:
+
+| Module | Repo | Ref |
+|--------|------|-----|
+| `skill-commit` | elvisgastelum/claude-commit-skill | `REF` |
+| `skill-continue` | elvisgastelum/claude-continue-skill | `REF` |
+| `skill-kaneo` | elvisgastelum/kaneo-work-tracking-skill | `REF` |
+| `statusline` | elvisgastelum/claude-statusline | `CLAUDE_STATUSLINE_RAW_URL` |
+| `herdr-config` | elvisgastelum/herdr-config | none: the script is pinned, but it downloads its files from `main` |
+
+To move the pins to the current default-branch commit of each repo (needs an authenticated `gh`):
+
+```bash
+pnpm --filter @claude-curated/catalog bump-installers          # dry run: current -> latest
+pnpm --filter @claude-curated/catalog bump-installers --write  # rewrite modules/*/module.json
+pnpm test                                                      # then review the diff and commit
+```
 
 To add your own, see [packages/catalog/README.md](packages/catalog/README.md).
 
