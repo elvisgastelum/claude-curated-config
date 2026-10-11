@@ -1,0 +1,20 @@
+{
+  "id": "herdr-claude",
+  "name": "herdr for Claude Code",
+  "description": "Runs `herdr integration install claude` (hooks/herdr-agent-state.sh plus its settings hooks) unless `herdr integration status` reports claude as current. Writes to ~/.claude only.",
+  "tags": ["herdr", "hooks", "installer"],
+  "requires": ["tool-herdr"],
+  "provides": {
+    "paths": ["hooks/herdr-agent-state.sh"],
+    "hooks": ["herdr-agent-state.sh"]
+  },
+  "steps": [
+    {
+      "type": "command",
+      "run": ["herdr", "integration", "install", "claude"],
+      "checkShell": "herdr integration status | grep -q '^claude: current'",
+      "requiresBin": "herdr",
+      "globalOnly": true
+    }
+  ]
+}

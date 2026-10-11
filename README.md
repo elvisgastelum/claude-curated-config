@@ -58,23 +58,43 @@ Exit codes: `0` ok, `1` a step failed (or, with `--dry-run`, would fail), `2` us
 | Profile | Modules |
 |---------|---------|
 | `minimal` | `core-settings`, `global-instructions` |
-| `full` | everything in the catalog |
-| `personal` | your captured modules (after `ccc capture`) |
+| `full` | a generic public setup: `core-settings`, `global-instructions`, `skill-commit`, `mcp-context7` |
+| `personal` | the maintainer's machine: every tool and installer module below plus `mcp-context7`; `ccc capture` appends `personal-*` modules for what is left |
 
 Profiles are listed in the TUI and `ccc list` by their `order` field (lowest first).
+
+### Installers and tools
+
+Most modules run the upstream installer of a tool or skill instead of copying a snapshot, so every machine gets the current version. Each one has a check (it runs only when the thing is missing) and declares what it `provides`, so `ccc capture` does not duplicate it.
+
+- Platforms: macOS and Linux. Tool installs use Homebrew (`brew`, also Homebrew on Linux) or `npm`; without them the step is skipped with a reason. Other systems skip them.
+- Prerequisites (`ccc doctor` checks them, all optional): `bash`, `curl`, `jq`, `npm`/`npx`, and `brew` on macOS.
+- Tool setup modules (`gentle-ai-claude`, `engram-claude`, `codegraph-claude`, `herdr-claude`, `skill-configure-env`) can only write to `~/.claude`; for another `--claude-dir` they are skipped. The skill installers and the status line honour `--claude-dir`.
+- Installers never prompt: their stdin is `/dev/null`.
 
 | Module | Installs |
 |--------|----------|
 | `core-settings` | Merges the settings schema and `permissions.deny` rules `Read(**/.env)`, `Read(**/.env.*)` and `Read(**/secrets/**)` (any depth) into `settings.json`. |
 | `global-instructions` | A starter `CLAUDE.md` with personal rules. Edit it after installing. |
-| `skill-commit` | `skills/commit/SKILL.md`, a title-only commit message policy. |
+| `skill-commit` | Runs the [claude-commit-skill](https://github.com/elvisgastelum/claude-commit-skill) installer: title-only commit skill, commit-guard hook, attribution settings, a managed CLAUDE.md block. |
 | `mcp-context7` | Registers the Context7 MCP server (`@upstash/context7-mcp`, pinned version) with `claude mcp add --scope user` (skipped if `claude` is not installed). |
+| `skill-kaneo` | Runs the kaneo-work-tracking-skill installer (skill, CLAUDE.md block, `kaneo` MCP server; `$KANEO_URL`, default `https://kaneo.example.com`). |
+| `skill-continue` | Runs the claude-continue-skill installer (`skills/continue`). |
+| `skill-configure-env` | `npx @elvisgastelum/configure-env install skill ...` (Node >= 22). |
+| `statusline` | Runs the claude-statusline installer (`statusline.sh` + `statusLine` setting; replaces an existing one). |
+| `tool-gentle-ai`, `tool-engram`, `tool-herdr` | `brew install` the tool when it is not on `PATH`. |
+| `tool-codegraph` | `npm install -g @colbymchenry/codegraph@1.6.0` when `codegraph` is not on `PATH`. |
+| `gentle-ai-claude` | `gentle-ai install --agent claude-code --scope global --preset full-gentleman` (once). |
+| `engram-claude` | `engram setup claude-code`. |
+| `codegraph-claude` | `codegraph install --yes --target claude --location global`. |
+| `herdr-claude` | `herdr integration install claude`. |
+| `herdr-config` | Runs the herdr-config installer, which writes outside the Claude dir (`~/.config/herdr`, `~/.local/bin/herdr-config`, `~/.agents/skills/herdr-config`). |
 
 To add your own, see [packages/catalog/README.md](packages/catalog/README.md).
 
 ## Safety
 
-- Writes only inside the target directory. Catalog paths that are absolute or contain `..` are rejected. Only `command` steps (such as `claude mcp add`) act outside it.
+- Writes only inside the target directory. Catalog paths that are absolute or contain `..` are rejected. Only `command` steps (such as `claude mcp add`, `brew install` or an upstream installer) act outside it; `ccc plan` lists each one before you apply.
 - Before replacing a file that differs, the old version is copied to `<claude-dir>/.ccc-backups/<timestamp>/` (a new directory per run; existing backups are never overwritten). A replaced symlink is backed up as a symlink with the same target.
 - Writes are atomic (temp file + rename), so an interrupted run never leaves a half-written file.
 - A failing step does not stop the run: the rest of its module and the modules that require it are skipped, everything else is applied, and the report lists every step (exit code `1`).
@@ -96,11 +116,13 @@ ccc --cli capture --out ~/code/claude-curated-config/packages/catalog --yes --js
 
 Write into your own clone of this repo, never into the installer's checkout (`~/.local/share/claude-curated-config` or `$CCC_HOME`): a later `ccc` update (`git pull --ff-only`) would conflict with the captured files. Outside the TUI, `--out` is required unless the catalog in use (`--catalog`) is inside a git checkout that is not the installer's; otherwise capture exits `2` (`out_required`). The TUI asks for the directory, defaulting to the catalog of the clone you run it from.
 
-It reads `~/.claude` (`CLAUDE.md`, `settings.json`, the status line script referenced by settings, `skills/*/`, `agents/*.md`, `commands/**/*.md`, `output-styles/*.md`) and the user-scope `mcpServers` from `~/.claude.json`, and writes one module per item into the catalog (`personal-settings`, `personal-claude-md`, `personal-skill-<name>`, `personal-mcp-<name>`, ...) plus a `personal` profile. Caches and state (`projects/`, `todos/`, `plugins/`, `history*`, logs, `.ccc-backups/`, ...) and dependency or build directories (`node_modules`, `.venv`, `venv`, `dist`, `build`, `target`, `.next`, `.cache`, `coverage`) are ignored. Symlinked directories inside an item are not followed, unreadable entries are skipped, and an item with more than 500 files or 5 MB is skipped whole; every skipped path is reported with its reason; plugins are captured through `enabledPlugins` and `extraKnownMarketplaces` in `settings.json`. MCP servers become `claude mcp add-json --scope user` commands.
+It reads `~/.claude` (`CLAUDE.md`, `settings.json`, the status line script referenced by settings, `skills/*/`, `agents/*.md`, `commands/**/*.md`, `output-styles/*.md`) and the user-scope `mcpServers` from `~/.claude.json`, and writes one module per item into the catalog (`personal-settings`, `personal-claude-md`, `personal-skill-<name>`, `personal-mcp-<name>`, ...) plus a `personal` profile (merged into an existing one: its modules and order stay, new captured modules are appended). Caches and state (`projects/`, `todos/`, `plugins/`, `history*`, logs, `.ccc-backups/`, ...) and dependency or build directories (`node_modules`, `.venv`, `venv`, `dist`, `build`, `target`, `.next`, `.cache`, `coverage`) are ignored. Symlinked directories inside an item are not followed, unreadable entries are skipped, and an item with more than 500 files or 5 MB is skipped whole; every skipped path is reported with its reason; plugins are captured through `enabledPlugins` and `extraKnownMarketplaces` in `settings.json`. MCP servers become `claude mcp add-json --scope user` commands.
 
 Secrets are never written. In JSON (settings, env maps, MCP `args`, `env` and `headers`) and scripts, values under secret-looking keys (`token`, `secret`, `password`, `api_key`, `auth`, `*_KEY`, `DATABASE_URL`, `*_CONNECTION_STRING`, ...) are replaced; markdown and text files only redact unambiguous names (`password:`, `token:`, `api_key:`, ...), so frontmatter such as `author:` stays intact. Everywhere, strings shaped like credentials are replaced: `sk-...` (incl. `sk-ant-`), `ghp_...`, `github_pat_...`, `xox?-...`, `AKIA...`, `npm_...`, `glpat-...`, `AIza...`, `hf_...`, private keys, JWTs, `Bearer` tokens, the password in `scheme://user:password@host`, `token=`/`key=`/`password=` URL parameters, hex strings of 32+ characters (git SHAs included) and long random strings. They become `${CCC_SECRET_<NAME>}` placeholders, and the module declares them under `secrets`; MCP servers keep the placeholder in their `add-json` argument until apply. Values that only reference environment variables (`${GITHUB_TOKEN}`) are kept. Capture prints every redaction (where and which placeholder, never the value).
 
 Applying a module with secrets asks for each value in the TUI (masked input); in `--cli` mode it reads the environment variable of the same name and exits `2` (`secrets_missing`, listing the names) when one is missing, before writing anything. `apply --dry-run` needs no values: those steps show as `needs secret <NAME>`.
+
+Capture skips what the catalog already installs: paths, settings keys, hook commands, MCP servers and managed CLAUDE.md blocks (`<!-- BEGIN name -->` or `<!-- gentle-ai:name -->` markers) that a non-personal module `provides` are reported as `skipped` with `provided by <module>`. `skills/synced` (managed by Claude) and `skills/homelab-service-manager` are never captured. The captured CLAUDE.md keeps only your own sections and, on apply, keeps the managed blocks installers add.
 
 Re-running capture updates the personal modules in place (unchanged files are not rewritten). Always review the result with `git diff` before committing.
 

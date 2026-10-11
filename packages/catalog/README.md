@@ -86,7 +86,9 @@ Rules:
 - Never put secrets, tokens or machine-specific paths in the catalog.
 - Pin package versions in `command` steps (e.g. `npx -y pkg@1.2.3`) so every machine gets the same thing.
 - Permission rules for paths should use `**/` globs (`Read(**/.env)`) so they match at any depth; `./` only matches the project root.
-- Give every `command` step a `check` so re-running is idempotent.
+- Give every `command` step a `check` or `checkShell` so re-running is idempotent, and a `requiresBin` so a missing prerequisite skips the step instead of failing it.
+- Prefer the upstream installer of a tool over a snapshot of its files, and declare what it writes under `provides`.
+- Tool installs (`tool-*`) set `"os": ["darwin", "linux"]`; a setup module `requires` its tool so it runs after the install.
 - `requires` lists modules that must be applied first; cycles are rejected.
 
 ## Secrets

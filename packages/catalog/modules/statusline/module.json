@@ -1,0 +1,21 @@
+{
+  "id": "statusline",
+  "name": "Status line",
+  "description": "Runs the claude-statusline installer (github.com/elvisgastelum/claude-statusline): writes statusline.sh and points settings.json statusLine at it (an existing statusLine is replaced; the installer keeps a .bak). Needs bash, curl and jq.",
+  "tags": ["statusline", "installer"],
+  "provides": {
+    "paths": ["statusline.sh"],
+    "settings": ["/statusLine"]
+  },
+  "steps": [
+    {
+      "type": "command",
+      "shell": "curl -fsSL https://raw.githubusercontent.com/elvisgastelum/claude-statusline/main/install.sh | bash",
+      "env": {
+        "CLAUDE_CONFIG_DIR": "${CCC_CLAUDE_DIR}"
+      },
+      "checkShell": "test -f \"$CCC_CLAUDE_DIR/statusline.sh\" && grep -q 'statusline.sh' \"$CCC_CLAUDE_DIR/settings.json\"",
+      "requiresBin": "curl"
+    }
+  ]
+}

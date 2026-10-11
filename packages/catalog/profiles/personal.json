@@ -1,0 +1,23 @@
+{
+  "id": "personal",
+  "name": "Personal",
+  "description": "The maintainer's machine: tools (gentle-ai, engram, codegraph, herdr) installed when missing, their Claude Code setup, the installer-based skills, status line and Context7. `ccc capture` appends personal-* modules for whatever is left. macOS and Linux.",
+  "order": 30,
+  "modules": [
+    "tool-gentle-ai",
+    "gentle-ai-claude",
+    "tool-engram",
+    "engram-claude",
+    "tool-codegraph",
+    "codegraph-claude",
+    "tool-herdr",
+    "herdr-claude",
+    "herdr-config",
+    "skill-commit",
+    "skill-kaneo",
+    "skill-continue",
+    "skill-configure-env",
+    "statusline",
+    "mcp-context7"
+  ]
+}

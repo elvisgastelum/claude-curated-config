@@ -1,7 +1,7 @@
 {
   "id": "full",
   "name": "Full",
-  "description": "Everything in the catalog: settings, instructions, skills and MCP servers.",
+  "description": "A generic public setup: safe settings, starter instructions, the commit skill installer and the Context7 MCP server.",
   "order": 20,
   "modules": ["core-settings", "global-instructions", "mcp-context7", "skill-commit"]
 }

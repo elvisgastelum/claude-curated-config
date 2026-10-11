@@ -15,12 +15,22 @@ URL=https://raw.githubusercontent.com/elvisgastelum/claude-curated-config/main/i
 curl -fsSL "$URL" | bash -s -- --cli doctor --json
 
 # 2. Preview. Use the profile or modules the user asked for; default to `minimal`
-#    when unspecified, and ask before choosing `full`.
+#    when unspecified, and ask before choosing `full` or `personal`.
 ccc --cli plan --profile minimal --json
 
 # 3. Apply (add --resolve / --on-conflict flags when the plan has conflicts, see below).
 ccc --cli apply --profile minimal --yes --json
 ```
+
+### Profiles that install tools (`personal`, `full`)
+
+These profiles run upstream installers (`curl ... | bash`, `brew install`, `npm install -g`, `npx`, `gentle-ai install`, `engram setup`, `codegraph install`, `herdr integration install`). Before applying:
+
+1. Run `ccc --cli plan --profile personal --json` and show the human every step with `action: "run"`: its module and `command` (for `shell` steps, `command` is `["bash", "-c", "<script>"]`). Say which ones install software (`tool-*`) and which write outside the Claude dir (`herdr-config`).
+2. Apply only after the human agrees: `ccc --cli apply --profile personal --yes --json`.
+3. Report `skipped` steps with their reason: a missing `brew`/`npm`/`curl` (`"<bin>" not found on PATH`), another OS (`runs only on darwin, linux`), or a tool that can only configure `~/.claude` while `--claude-dir` points elsewhere (`configures ~/.claude only`). Do not install the missing prerequisite yourself without asking.
+
+Installers run with stdin closed, so they never wait for input. Re-runs are idempotent: each step has a check and runs only when its target is missing.
 
 ### Settings conflicts
 
@@ -58,6 +68,7 @@ git -C <repo> diff --stat && git -C <repo> diff   # 3. review
 
 Rules:
 
+- Capture skips whatever the catalog's installer modules `provide` (reported in `skipped` as `provided by <module>`), plus `skills/synced` and `skills/homelab-service-manager`. Do not hand-copy those items into personal modules.
 - Pass `--out <your clone>/packages/catalog` so the modules land in the git checkout you will commit from. Without `--out`, capture exits `2` (`ccc.error/v1` code `out_required`) when the catalog in use is the installer's checkout (`$CCC_HOME`, default `~/.local/share/claude-curated-config`) or is not inside a git checkout.
 - Before committing, show the human the `redactions` list (module, location, placeholder) and the `git diff`, and get their go-ahead. If you spot a secret that was not redacted, stop and tell them; do not commit it.
 - Output is `ccc.capture/v1`: `{ claudeDir, claudeJson, outDir, dryRun, items: [{ id, kind, source, action, files, secrets }], redactions: [{ module, location, placeholder }], skipped: [{ path, reason }], warnings, profile: { id, path, action, modules } }`. It never contains secret values.
@@ -76,7 +87,7 @@ Rules:
 
 Every document has a `schema` field.
 
-- `ccc.doctor/v1`: `{ ok, checks: [{ id, ok, required, message, fix? }] }`. `ok` is false only if a `required` check fails. A missing `claude` CLI is a warning: `command` steps are skipped until it is installed.
+- `ccc.doctor/v1`: `{ ok, checks: [{ id, ok, required, message, fix? }] }`. `ok` is false only if a `required` check fails. A missing `claude` CLI is a warning: `command` steps are skipped until it is installed. Installer prerequisites (`bash`, `curl`, `jq`, `npm`, `npx`, `brew`) are optional checks.
 - `ccc.list/v1`: `{ catalogDir, modules: [{ id, name, description, tags, requires, steps }], profiles: [{ id, name, description, order?, modules }] }`. Profiles are sorted by `order` (lower first), then id.
 - `ccc.plan/v1`: `{ claudeDir, selection, summary: { create, update, unchanged, run, skip }, modules: [{ id, name, steps: [{ index, type, action, reason, summary, dest?, command?, blocked }] }], conflicts: [{ module, step, dest, path, current, catalog, resolution? }] }`. Modules are in apply order (required modules first).
 - `ccc.apply/v1`: `{ claudeDir, selection, dryRun, ok, backupDir, summary: { done, unchanged, skipped, failed, planned }, modules: [{ id, name, ok, steps: [{ index, type, action, status, message, dest?, command?, backup? }] }] }`.

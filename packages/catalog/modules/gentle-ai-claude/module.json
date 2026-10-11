@@ -1,0 +1,58 @@
+{
+  "id": "gentle-ai-claude",
+  "name": "gentle-ai for Claude Code",
+  "description": "Runs `gentle-ai install --agent claude-code --scope global --preset full-gentleman` once (skipped when ~/.gentle-ai/state.json already lists claude-code): SDD/review/judgment-day agents, gentle-sdd commands, its skills, the gentleman theme and output style, its settings hooks and managed CLAUDE.md sections. Writes to ~/.claude only. Run `gentle-ai sync` later to update.",
+  "tags": ["gentle-ai", "agents", "skills", "installer"],
+  "requires": ["tool-gentle-ai"],
+  "provides": {
+    "paths": [
+      "agents/sdd-*.md",
+      "agents/jd-*.md",
+      "agents/review-*.md",
+      "agents/.gentle-ai-native-agent-ownership.json",
+      "commands/gentle-sdd-*.md",
+      "commands/sdd-*.md",
+      "mcp/context7.json",
+      "mcp/engram.json",
+      "output-styles/gentleman.md",
+      "themes/gentleman*.json",
+      "skills/_shared",
+      "skills/sdd-*",
+      "skills/branch-pr",
+      "skills/chained-pr",
+      "skills/cognitive-doc-design",
+      "skills/comment-writer",
+      "skills/gentle-ai-bench",
+      "skills/go-testing",
+      "skills/issue-creation",
+      "skills/judgment-day",
+      "skills/rdd-defect-workflow",
+      "skills/skill-creator",
+      "skills/skill-improver",
+      "skills/skill-registry",
+      "skills/systemic-issue-triage",
+      "skills/work-unit-commits"
+    ],
+    "settings": ["/theme"],
+    "hooks": ["gentle-ai "],
+    "claudeMdBlocks": ["gentle-ai:*"]
+  },
+  "steps": [
+    {
+      "type": "command",
+      "run": [
+        "gentle-ai",
+        "install",
+        "--agent",
+        "claude-code",
+        "--scope",
+        "global",
+        "--preset",
+        "full-gentleman"
+      ],
+      "checkShell": "grep -q '\"claude-code\"' \"$HOME/.gentle-ai/state.json\"",
+      "requiresBin": "gentle-ai",
+      "globalOnly": true
+    }
+  ]
+}

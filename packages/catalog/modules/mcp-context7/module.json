@@ -3,6 +3,9 @@
   "name": "Context7 MCP server",
   "description": "Registers the Context7 documentation MCP server for your user (needs the claude CLI).",
   "tags": ["mcp", "docs"],
+  "provides": {
+    "mcpServers": ["context7"]
+  },
   "steps": [
     {
       "type": "command",

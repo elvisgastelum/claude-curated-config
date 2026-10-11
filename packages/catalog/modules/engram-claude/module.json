@@ -1,0 +1,19 @@
+{
+  "id": "engram-claude",
+  "name": "Engram for Claude Code",
+  "description": "Runs `engram setup claude-code` (Engram memory integration for Claude Code) unless .claude.json already registers an engram MCP server. Writes to ~/.claude only. TODO: the exact files engram setup writes are unverified; the check only looks for the engram MCP server.",
+  "tags": ["engram", "mcp", "installer"],
+  "requires": ["tool-engram"],
+  "provides": {
+    "mcpServers": ["engram"]
+  },
+  "steps": [
+    {
+      "type": "command",
+      "run": ["engram", "setup", "claude-code"],
+      "checkShell": "grep -q '\"engram\"' \"$CCC_CLAUDE_JSON\"",
+      "requiresBin": "engram",
+      "globalOnly": true
+    }
+  ]
+}

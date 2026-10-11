@@ -1,0 +1,15 @@
+{
+  "id": "tool-codegraph",
+  "name": "CodeGraph CLI",
+  "description": "Installs the codegraph CLI globally with npm (@colbymchenry/codegraph@1.6.0) when it is not on PATH. Needs npm.",
+  "tags": ["tool", "installer"],
+  "steps": [
+    {
+      "type": "command",
+      "shell": "npm install -g @colbymchenry/codegraph@1.6.0",
+      "checkShell": "command -v codegraph >/dev/null",
+      "requiresBin": "npm",
+      "os": ["darwin", "linux"]
+    }
+  ]
+}

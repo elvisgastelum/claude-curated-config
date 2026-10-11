@@ -158,23 +158,33 @@ function renderCapture(capture: CaptureResult, written: CaptureWriteResult, c: C
 }
 
 /**
- * What the catalog's non-personal modules provide, so capture leaves it out: the catalog in
- * `outDir` when it is a valid catalog, else the catalog in use (nothing when neither loads).
+ * What the non-personal modules provide, so capture leaves it out: the union of the catalog
+ * in use and the catalog in `outDir` (each only when it loads), so the result does not
+ * depend on what earlier captures wrote.
  */
 function providedBy(ctx: Context, outDir?: string): ProvidedIndex {
-  if (outDir && existsSync(join(outDir, "modules"))) {
+  const catalogs: Catalog[] = [];
+  try {
+    catalogs.push(ctx.catalog());
+  } catch {
+    // no usable catalog in use
+  }
+  if (
+    outDir &&
+    existsSync(join(outDir, "modules")) &&
+    resolve(outDir) !== resolve(ctx.catalogPath)
+  ) {
     try {
-      return collectProvided(loadCatalog(outDir));
+      catalogs.push(loadCatalog(outDir));
     } catch {
-      // not a valid catalog: fall back to the one in use
+      // not a valid catalog: ignore it
     }
   }
-  try {
-    return collectProvided(ctx.catalog());
-  } catch {
-    // no usable catalog: nothing is provided, everything is captured
-    return collectProvided({ dir: "", modules: [], profiles: [] });
-  }
+  return collectProvided({
+    dir: "",
+    modules: catalogs.flatMap((catalog) => catalog.modules),
+    profiles: [],
+  });
 }
 
 /** `ccc capture`: imports the current Claude config into catalog modules. */

@@ -1,0 +1,15 @@
+{
+  "id": "herdr-config",
+  "name": "herdr config",
+  "description": "Runs the herdr-config installer (github.com/elvisgastelum/herdr-config) when `herdr-config` is not installed. It writes OUTSIDE the Claude dir: ~/.config/herdr, ~/.local/bin/herdr-config and ~/.agents/skills/herdr-config. Needs curl.",
+  "tags": ["herdr", "installer", "outside-claude-dir"],
+  "requires": ["tool-herdr"],
+  "steps": [
+    {
+      "type": "command",
+      "shell": "curl -fsSL https://raw.githubusercontent.com/elvisgastelum/herdr-config/main/install.sh | sh",
+      "checkShell": "command -v herdr-config >/dev/null || test -x \"$HOME/.local/bin/herdr-config\"",
+      "requiresBin": "curl"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "id": "codegraph-claude",
+  "name": "CodeGraph for Claude Code",
+  "description": "Runs `codegraph install --yes --target claude --location global`: registers the codegraph MCP server (and its auto-allow permissions) unless .claude.json already has it. Writes to ~/.claude.json only.",
+  "tags": ["codegraph", "mcp", "installer"],
+  "requires": ["tool-codegraph"],
+  "provides": {
+    "mcpServers": ["codegraph"],
+    "hooks": ["codegraph prompt-hook"]
+  },
+  "steps": [
+    {
+      "type": "command",
+      "run": ["codegraph", "install", "--yes", "--target", "claude", "--location", "global"],
+      "checkShell": "grep -q '\"codegraph\"' \"$CCC_CLAUDE_JSON\"",
+      "requiresBin": "codegraph",
+      "globalOnly": true
+    }
+  ]
+}

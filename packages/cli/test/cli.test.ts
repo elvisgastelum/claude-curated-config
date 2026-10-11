@@ -291,6 +291,10 @@ describe("ccc --cli", () => {
     const home = temp();
     const claudeDir = join(home, ".claude");
     writeClaudeFixture(claudeDir, join(home, ".claude.json"), "~/.claude/statusline.sh");
+    mkdirSync(join(claudeDir, "skills/mine"), { recursive: true });
+    writeFileSync(join(claudeDir, "skills/mine/SKILL.md"), "---\nname: mine\n---\n");
+    writeFileSync(join(claudeDir, "skills/mine/run.sh"), "#!/bin/sh\necho mine\n");
+    chmodSync(join(claudeDir, "skills/mine/run.sh"), 0o755);
     const out = join(temp(), "catalog");
     mkdirSync(out);
     const env = { HOME: home };
@@ -309,8 +313,19 @@ describe("ccc --cli", () => {
     expect(run.code).toBe(0);
     const doc = run.json();
     expect(doc.schema).toBe("ccc.capture/v1");
-    expect((doc.items as { id: string }[]).map((i) => i.id)).toContain("personal-statusline");
-    expect((doc.items as { id: string }[]).map((i) => i.id)).toContain("personal-mcp-github");
+    const ids = (doc.items as { id: string }[]).map((i) => i.id);
+    expect(ids).toContain("personal-mcp-github");
+    // Provided by catalog installer modules, so not captured again.
+    for (const id of ["personal-statusline", "personal-skill-commit", "personal-mcp-context7"]) {
+      expect(ids).not.toContain(id);
+    }
+    expect(doc.skipped).toEqual(
+      expect.arrayContaining([
+        { path: "statusline.sh", reason: "provided by statusline" },
+        { path: "skills/commit/", reason: "provided by skill-commit" },
+        { path: ".claude.json /mcpServers/context7", reason: "provided by mcp-context7" },
+      ]),
+    );
     expect((doc.redactions as unknown[]).length).toBeGreaterThan(0);
     for (const secret of FAKE_SECRETS) {
       expect(run.stdout).not.toContain(secret);
@@ -374,7 +389,7 @@ describe("ccc --cli", () => {
     expect(applied.stdout).not.toContain("env-CCC_SECRET");
     const settings = JSON.parse(readFileSync(join(target, "settings.json"), "utf8"));
     expect(settings.env.ANTHROPIC_API_KEY).toBe("env-CCC_SECRET_SETTINGS_ANTHROPIC_API_KEY");
-    expect(statSync(join(target, "statusline.sh")).mode & 0o100).toBe(0o100);
+    expect(statSync(join(target, "skills/mine/run.sh")).mode & 0o100).toBe(0o100);
   });
 
   it("requires --out when the catalog is the installer checkout or not in a git checkout", () => {
@@ -445,5 +460,153 @@ describe("ccc --cli", () => {
     const run = ccc(["--cli", "capture", "--include", "nope", "--dry-run", "--json"]);
     expect(run.code).toBe(2);
     expect((run.json().error as { code: string }).code).toBe("invalid_include");
+  });
+});
+
+/** Fake tool scripts: each records its argv in `log`, then simulates what the real tool does. */
+const TOOL_FAKES: Record<string, string> = {
+  "gentle-ai": `if [ "$1" = install ]; then mkdir -p "$HOME/.gentle-ai"; echo '{"installed_agents":["claude-code"]}' > "$HOME/.gentle-ai/state.json"; fi`,
+  engram: `if [ "$1" = setup ]; then echo '"engram"' >> "$HOME/.claude.json"; fi`,
+  codegraph: `if [ "$1" = install ]; then echo '"codegraph"' >> "$HOME/.claude.json"; fi`,
+  herdr: [
+    `case "$1 $2" in`,
+    `  "integration install") touch "$HOME/.herdr-claude" ;;`,
+    `  "integration status") [ -f "$HOME/.herdr-claude" ] && echo "claude: current (v10)" ;;`,
+    "esac",
+    "exit 0",
+  ].join("\n"),
+};
+
+/** What the fake `curl` prints for each installer URL (run by the real bash/sh). */
+const CURL_FAKE = [
+  `case "$*" in`,
+  `  *claude-commit-skill*) echo 'mkdir -p "$CLAUDE_DIR/skills/commit" "$CLAUDE_DIR/hooks" && touch "$CLAUDE_DIR/skills/commit/SKILL.md" "$CLAUDE_DIR/hooks/commit-guard.sh" && printf "<!-- BEGIN claude-commit-skill -->\\nno ai\\n<!-- END claude-commit-skill -->\\n" >> "$CLAUDE_DIR/CLAUDE.md"' ;;`,
+  `  *kaneo-work-tracking-skill*) echo 'mkdir -p "$CLAUDE_DIR/skills/kaneo-work-tracking" && touch "$CLAUDE_DIR/skills/kaneo-work-tracking/SKILL.md" && echo "\\"kaneo\\" $KANEO_URL" >> "$CLAUDE_JSON"' ;;`,
+  `  *claude-continue-skill*) echo 'mkdir -p "$CLAUDE_DIR/skills/continue" && touch "$CLAUDE_DIR/skills/continue/SKILL.md"' ;;`,
+  `  *claude-statusline*) echo 'touch "$CLAUDE_CONFIG_DIR/statusline.sh" && echo "{\\"statusLine\\":{\\"command\\":\\"bash statusline.sh\\"}}" > "$CLAUDE_CONFIG_DIR/settings.json"' ;;`,
+  `  *herdr-config*) echo 'mkdir -p "$HOME/.local/bin" && printf "#!/bin/sh\\n" > "$HOME/.local/bin/herdr-config" && chmod +x "$HOME/.local/bin/herdr-config"' ;;`,
+  "esac",
+].join("\n");
+
+/**
+ * A PATH dir with fake brew, npm, npx and curl. `brew install` and `npm install -g` "install"
+ * the matching fake tool into the dir, so setup modules only find their tool after the install.
+ */
+function fakeToolbox(home: string): { bin: string; log: string } {
+  const bin = join(home, "bin");
+  const tools = join(home, "tool-fakes");
+  const log = join(home, "calls.log");
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(tools, { recursive: true });
+  const write = (dir: string, name: string, body: string) => {
+    const file = join(dir, name);
+    writeFileSync(file, `#!/bin/sh\necho "${name} $*" >> '${log}'\n${body}\n`);
+    chmodSync(file, 0o755);
+  };
+  for (const [name, body] of Object.entries(TOOL_FAKES)) write(tools, name, body);
+  write(bin, "brew", `name=$(basename "$2"); cp '${tools}'/"$name" '${bin}'/"$name"`);
+  write(bin, "npm", `cp '${tools}/codegraph' '${bin}/codegraph'`);
+  write(
+    bin,
+    "npx",
+    `mkdir -p "$HOME/.claude/skills/configure-env" && touch "$HOME/.claude/skills/configure-env/SKILL.md"`,
+  );
+  write(bin, "curl", CURL_FAKE);
+  return { bin, log };
+}
+
+describe("personal profile with fake installers", () => {
+  const RAW = "https://raw.githubusercontent.com/elvisgastelum";
+
+  it("installs tools before their setup, runs the installers, and is idempotent", () => {
+    const home = temp();
+    const { bin, log } = fakeToolbox(home);
+    const env = { HOME: home, PATH: `${bin}:/usr/bin:/bin`, KANEO_URL: "https://kaneo.test" };
+    const args = ["--cli", "apply", "--profile", "personal", "--yes", "--json"];
+
+    const first = ccc(args, env);
+    expect(first.stderr).toBe("");
+    expect(first.code).toBe(0);
+    const calls = readFileSync(log, "utf8").trim().split("\n");
+    const at = (prefix: string) => {
+      const index = calls.findIndex((call) => call.startsWith(prefix));
+      expect(index, prefix).toBeGreaterThanOrEqual(0);
+      return index;
+    };
+    expect(at("brew install gentleman-programming/tap/gentle-ai")).toBeLessThan(
+      at("gentle-ai install --agent claude-code --scope global --preset full-gentleman"),
+    );
+    expect(at("brew install gentleman-programming/tap/engram")).toBeLessThan(
+      at("engram setup claude-code"),
+    );
+    expect(at("npm install -g @colbymchenry/codegraph@1.6.0")).toBeLessThan(
+      at("codegraph install --yes --target claude --location global"),
+    );
+    expect(at("brew install herdr")).toBeLessThan(at("herdr integration install claude"));
+    for (const repo of [
+      "claude-commit-skill",
+      "kaneo-work-tracking-skill",
+      "claude-continue-skill",
+      "claude-statusline",
+      "herdr-config",
+    ]) {
+      at(`curl -fsSL ${RAW}/${repo}/main/install.sh`);
+    }
+    at("npx -y @elvisgastelum/configure-env install skill --ci --scope user --mode copy");
+
+    // Installers got the target dirs and the overridable Kaneo URL through env.
+    const claudeDir = join(home, ".claude");
+    expect(existsSync(join(claudeDir, "skills/commit/SKILL.md"))).toBe(true);
+    expect(existsSync(join(claudeDir, "statusline.sh"))).toBe(true);
+    expect(readFileSync(join(home, ".claude.json"), "utf8")).toContain(
+      '"kaneo" https://kaneo.test',
+    );
+
+    const doc = first.json();
+    const context7 = (doc.modules as { id: string; steps: { status: string }[] }[]).find(
+      (m) => m.id === "mcp-context7",
+    );
+    expect(context7?.steps[0]?.status).toBe("skipped");
+
+    const before = calls.length;
+    const second = ccc(args, env);
+    expect(second.code).toBe(0);
+    expect(new Set(statuses(second.json()))).toEqual(new Set(["unchanged", "skipped"]));
+    const again = readFileSync(log, "utf8").trim().split("\n").slice(before);
+    expect(again.every((call) => call === "herdr integration status")).toBe(true);
+  });
+
+  it("skips tool installs on an unsupported OS and ~/.claude-only setups for another dir", () => {
+    const home = temp();
+    const { bin } = fakeToolbox(home);
+    const env = { HOME: home, PATH: `${bin}:/usr/bin:/bin` };
+    type Step = { action: string; reason: string };
+    const steps = (doc: Record<string, unknown>) =>
+      Object.fromEntries(
+        (doc.modules as { id: string; steps: Step[] }[]).map((m) => [m.id, m.steps[0]]),
+      ) as Record<string, Step>;
+
+    const win = steps(
+      ccc(["--cli", "plan", "--profile", "personal", "--json"], {
+        ...env,
+        CCC_PLATFORM: "win32",
+      }).json(),
+    );
+    for (const id of ["tool-gentle-ai", "tool-engram", "tool-codegraph", "tool-herdr"]) {
+      expect(win[id]?.action, id).toBe("skip");
+      expect(win[id]?.reason, id).toMatch(/runs only on darwin, linux \(this is win32\)/);
+    }
+
+    const other = steps(
+      ccc(["--cli", "plan", "--profile", "personal", "--json", "--claude-dir", join(home, "x")], {
+        ...env,
+        PATH: `${bin}:${join(home, "tool-fakes")}:/usr/bin:/bin`,
+      }).json(),
+    );
+    for (const id of ["gentle-ai-claude", "engram-claude", "codegraph-claude", "herdr-claude"]) {
+      expect(other[id]?.action, id).toBe("skip");
+      expect(other[id]?.reason, id).toMatch(/configures ~\/\.claude only/);
+    }
+    expect(other["skill-commit"]?.action).toBe("run");
   });
 });

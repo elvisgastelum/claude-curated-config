@@ -1,0 +1,31 @@
+{
+  "id": "skill-configure-env",
+  "name": "configure-env skill",
+  "description": "Installs the configure-env skill with `npx -y @elvisgastelum/configure-env install skill --ci --scope user --mode copy --agent claude` unless it is already there. Needs Node.js >= 22 and npx. Writes to ~/.claude only.",
+  "tags": ["skills", "installer"],
+  "provides": {
+    "paths": ["skills/configure-env"]
+  },
+  "steps": [
+    {
+      "type": "command",
+      "run": [
+        "npx",
+        "-y",
+        "@elvisgastelum/configure-env",
+        "install",
+        "skill",
+        "--ci",
+        "--scope",
+        "user",
+        "--mode",
+        "copy",
+        "--agent",
+        "claude"
+      ],
+      "checkShell": "test -f \"$CCC_CLAUDE_DIR/skills/configure-env/SKILL.md\"",
+      "requiresBin": "npx",
+      "globalOnly": true
+    }
+  ]
+}
