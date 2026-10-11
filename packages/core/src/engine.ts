@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { resolveSelection } from "./catalog";
 import { runArgv, which } from "./exec";
@@ -12,6 +12,7 @@ import {
 } from "./fsutil";
 import { changedPaths, deepMerge, findConflicts } from "./merge";
 import { resolveDest, resolveInside } from "./paths";
+import { maskJson, maskValues, type SecretSpec, substitute, substituteJson } from "./secrets";
 import type {
   ApplyResult,
   Catalog,
@@ -44,6 +45,10 @@ interface Evaluation {
   writePath?: string;
   /** Content to write for copy and json-merge steps. */
   content?: Buffer;
+  /** File mode for copied files (keeps the executable bit of scripts). */
+  mode?: number;
+  /** Command argv with secrets substituted (command steps). */
+  argv?: string[];
   /** Absolute symlink target for symlink steps. */
   linkTarget?: string;
   /** json-merge values this step would overwrite (with their resolution when decided). */
@@ -52,6 +57,19 @@ interface Evaluation {
 
 /** Decides a conflict of `module` at a JSON pointer; undefined means "ask". */
 type Decide = (module: string, path: string) => Resolution | undefined;
+
+interface EvalContext {
+  claudeDir: string;
+  env: NodeJS.ProcessEnv;
+  decide: Decide;
+  /** Values for `${CCC_SECRET_*}` placeholders. */
+  secrets: Record<string, string>;
+}
+
+/** Last key of a JSON pointer (unescaped), used to recognise secret-looking keys. */
+function lastKey(pointer: string): string {
+  return (pointer.split("/").pop() ?? "").replaceAll("~1", "/").replaceAll("~0", "~");
+}
 
 export function conflictKey(module: string, path: string): string {
   return `${module}:${path}`;
@@ -82,7 +100,7 @@ function describePaths(paths: string[]): string {
 function evaluateFile(
   step: Extract<Step, { type: "file" }>,
   mod: CatalogModule,
-  claudeDir: string,
+  { claudeDir, secrets }: EvalContext,
 ): Evaluation {
   const srcPath = resolveInside(mod.dir, step.src, "src");
   const destPath = resolveDest(claudeDir, step.dest);
@@ -110,7 +128,11 @@ function evaluateFile(
       linkTarget,
     };
   }
-  const content = readFileSync(srcPath);
+  let content = readFileSync(srcPath);
+  const mode = statSync(srcPath).mode & 0o777;
+  if (!content.includes(0) && content.includes(`\${CCC_SECRET_`)) {
+    content = Buffer.from(substitute(content.toString("utf8"), secrets));
+  }
   if (!stat) {
     return {
       action: "create",
@@ -118,6 +140,7 @@ function evaluateFile(
       summary: `new file (${lineCount(content.toString("utf8"))} lines)`,
       destPath,
       content,
+      mode,
     };
   }
   if (stat.isSymbolicLink()) {
@@ -127,6 +150,7 @@ function evaluateFile(
       summary: `replace symlink -> ${readlinkSync(destPath)}`,
       destPath,
       content,
+      mode,
     };
   }
   const current = readFileSync(destPath);
@@ -145,10 +169,10 @@ function evaluateFile(
 function evaluateJsonMerge(
   step: Extract<Step, { type: "json-merge" }>,
   mod: CatalogModule,
-  claudeDir: string,
-  decide: Decide,
+  { claudeDir, decide, secrets }: EvalContext,
 ): Evaluation {
-  const src = JSON.parse(readFileSync(resolveInside(mod.dir, step.src, "src"), "utf8"));
+  const raw = JSON.parse(readFileSync(resolveInside(mod.dir, step.src, "src"), "utf8"));
+  const src = substituteJson(raw, secrets);
   const destPath = resolveDest(claudeDir, step.dest);
   const link = isLink(destPath);
   const exists = existsSync(destPath);
@@ -180,8 +204,14 @@ function evaluateJsonMerge(
   const conflicts: NonNullable<Evaluation["conflicts"]> = (
     exists ? findConflicts(existing, src) : []
   ).map((conflict) => {
+    // Shown to humans and agents: never echo secret values.
+    const shown = {
+      path: conflict.path,
+      current: maskJson(conflict.current, secrets, lastKey(conflict.path)),
+      catalog: maskJson(conflict.catalog, secrets, lastKey(conflict.path)),
+    };
     const resolution = decide(mod.id, conflict.path);
-    return resolution ? { ...conflict, resolution } : conflict;
+    return resolution ? { ...shown, resolution } : shown;
   });
   const keep = new Set(conflicts.filter((c) => c.resolution === "keep").map((c) => c.path));
   const merged = deepMerge(existing, src, keep);
@@ -215,41 +245,39 @@ function evaluateJsonMerge(
 
 function evaluateCommand(
   step: Extract<Step, { type: "command" }>,
-  env: NodeJS.ProcessEnv,
+  { env, secrets }: EvalContext,
 ): Evaluation {
   const summary = step.run.join(" ");
   if (step.requiresBin && !which(step.requiresBin, env)) {
     return { action: "skip", reason: `"${step.requiresBin}" not found on PATH`, summary };
   }
+  const argv = step.run.map((arg) => substitute(arg, secrets));
   if (step.check) {
-    const check = runArgv(step.check, env);
+    const check = runArgv(
+      step.check.map((arg) => substitute(arg, secrets)),
+      env,
+    );
     if (check.code === 0) return { action: "unchanged", reason: "check passed", summary };
-    return { action: "run", reason: "check failed", summary };
+    return { action: "run", reason: "check failed", summary, argv };
   }
-  return { action: "run", reason: "no check defined", summary };
+  return { action: "run", reason: "no check defined", summary, argv };
 }
 
-function evaluate(
-  step: Step,
-  mod: CatalogModule,
-  claudeDir: string,
-  env: NodeJS.ProcessEnv,
-  decide: Decide,
-): Evaluation {
+function evaluate(step: Step, mod: CatalogModule, ctx: EvalContext): Evaluation {
   try {
     switch (step.type) {
       case "file":
-        return evaluateFile(step, mod, claudeDir);
+        return evaluateFile(step, mod, ctx);
       case "json-merge":
-        return evaluateJsonMerge(step, mod, claudeDir, decide);
+        return evaluateJsonMerge(step, mod, ctx);
       case "command":
-        return evaluateCommand(step, env);
+        return evaluateCommand(step, ctx);
     }
   } catch (error) {
-    // One unreadable file must not abort the whole plan: the step is reported as blocked.
+    // One unreadable file or missing secret must not abort the whole plan: the step is blocked.
     return {
       action: "skip",
-      reason: (error as Error).message,
+      reason: maskValues((error as Error).message, ctx.secrets),
       summary: "blocked",
       blocked: true,
     };
@@ -258,9 +286,7 @@ function evaluate(
 
 function planModule(
   mod: CatalogModule,
-  claudeDir: string,
-  env: NodeJS.ProcessEnv,
-  decide: Decide,
+  ctx: EvalContext,
   conflicts: Conflict[] = [],
 ): PlannedModule {
   return {
@@ -270,7 +296,7 @@ function planModule(
     dir: mod.dir,
     requires: mod.requires ?? [],
     steps: mod.steps.map((step, index) => {
-      const evaluation = evaluate(step, mod, claudeDir, env, decide);
+      const evaluation = evaluate(step, mod, ctx);
       for (const conflict of evaluation.conflicts ?? []) {
         conflicts.push({
           module: mod.id,
@@ -303,6 +329,8 @@ export interface PlanOptions extends Selection {
   resolutions?: Resolutions;
   /** Policy for conflicts without an explicit decision (default "ask": leave unresolved). */
   onConflict?: ConflictPolicy;
+  /** Values for the `${CCC_SECRET_*}` placeholders of the selected modules. */
+  secrets?: Record<string, string>;
 }
 
 /** Computes what applying the selection would do, without changing anything. */
@@ -310,12 +338,29 @@ export function plan(options: PlanOptions): Plan {
   const claudeDir = resolve(options.claudeDir);
   const env = options.env ?? process.env;
   const { resolutions = {}, onConflict = "ask" } = options;
-  const decide = decider(resolutions, onConflict);
+  const secrets = options.secrets ?? {};
+  const ctx: EvalContext = { claudeDir, env, decide: decider(resolutions, onConflict), secrets };
   const conflicts: Conflict[] = [];
   const modules = resolveSelection(options.catalog, options).map((mod) =>
-    planModule(mod, claudeDir, env, decide, conflicts),
+    planModule(mod, ctx, conflicts),
   );
-  return { claudeDir, modules, conflicts, resolutions, onConflict };
+  const result: Plan = { claudeDir, modules, conflicts, resolutions, onConflict };
+  // Non-enumerable so a serialized plan never carries secret values.
+  Object.defineProperty(result, "secretValues", { value: secrets, enumerable: false });
+  return result;
+}
+
+/** Secrets declared by the selected modules (and their requires), deduplicated by name. */
+export function requiredSecrets(
+  catalog: Catalog,
+  selection: Selection,
+): (SecretSpec & { module: string })[] {
+  const seen = new Set<string>();
+  return resolveSelection(catalog, selection).flatMap((mod) =>
+    (mod.secrets ?? [])
+      .filter((secret) => !seen.has(secret.name) && seen.add(secret.name))
+      .map((secret) => ({ ...secret, module: mod.id })),
+  );
 }
 
 /** Conflicts that still need a decision before the plan can be applied. */
@@ -352,7 +397,13 @@ export function startApply(planToApply: Plan, options: ApplyOptions = {}): Apply
   const env = options.env ?? process.env;
   const dryRun = options.dryRun ?? false;
   const backups: BackupStore = createBackupStore(claudeDir, (options.now ?? (() => new Date()))());
-  const decide = decider(planToApply.resolutions, planToApply.onConflict);
+  const secrets = planToApply.secretValues ?? {};
+  const ctx: EvalContext = {
+    claudeDir,
+    env,
+    decide: decider(planToApply.resolutions, planToApply.onConflict),
+    secrets,
+  };
   const failedModules = new Set<string>();
   const results: ModuleResult[] = [];
 
@@ -364,12 +415,12 @@ export function startApply(planToApply: Plan, options: ApplyOptions = {}): Apply
       command: planned.command,
     };
     const catalogModule: CatalogModule = { ...mod, steps: [] };
-    const evaluation = evaluate(planned.step, catalogModule, claudeDir, env, decide);
+    const evaluation = evaluate(planned.step, catalogModule, ctx);
     const result = (status: StepResult["status"], message: string): StepResult => ({
       ...base,
       action: evaluation.action,
       status,
-      message,
+      message: maskValues(message, secrets),
     });
     if (evaluation.action === "skip") {
       return result(evaluation.blocked ? "failed" : "skipped", evaluation.reason);
@@ -383,7 +434,7 @@ export function startApply(planToApply: Plan, options: ApplyOptions = {}): Apply
     try {
       if (evaluation.action === "run") {
         const step = planned.step as Extract<Step, { type: "command" }>;
-        const run = runArgv(step.run, env);
+        const run = runArgv(evaluation.argv ?? step.run, env);
         if (run.code === 0) return result("done", `ran ${step.run.join(" ")}`);
         const output = (run.stderr || run.stdout).trim().split("\n").slice(-5).join("\n");
         return result("failed", `exit ${run.code}: ${output}`);
@@ -395,7 +446,7 @@ export function startApply(planToApply: Plan, options: ApplyOptions = {}): Apply
         backupPath = backups.save(writePath, planned.dest as string);
       }
       if (evaluation.linkTarget) symlinkAtomic(evaluation.linkTarget, destPath);
-      else writeFileAtomic(writePath, evaluation.content as Buffer);
+      else writeFileAtomic(writePath, evaluation.content as Buffer, evaluation.mode);
       const done = result("done", evaluation.summary || evaluation.reason);
       if (backupPath) done.backup = backupPath;
       return done;
@@ -466,7 +517,7 @@ export function status(options: StatusOptions): StatusReport {
   const claudeDir = resolve(options.claudeDir);
   const env = options.env ?? process.env;
   const modules: ModuleStatus[] = options.catalog.modules.map((mod) => {
-    const planned = planModule(mod, claudeDir, env, decider());
+    const planned = planModule(mod, { claudeDir, env, decide: decider(), secrets: {} });
     const count = (pred: (s: PlannedStep) => boolean) => planned.steps.filter(pred).length;
     const satisfied = count((s) => s.action === "unchanged");
     const skipped = count((s) => s.action === "skip" && !s.blocked);

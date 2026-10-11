@@ -1,6 +1,7 @@
 import { CatalogError } from "@claude-curated/core";
 import { Command, CommanderError } from "commander";
 import pkg from "../package.json" with { type: "json" };
+import { type CaptureFlags, captureCommand } from "./capture";
 import {
   type ApplyFlags,
   applyCommand,
@@ -88,6 +89,25 @@ function buildProgram(setExit: (code: number) => void, json: boolean): Command {
     .option("-y, --yes", "apply without asking for confirmation")
     .option("--dry-run", "report what would happen without writing")
     .action(async (opts: ApplyFlags, cmd: Command) => setExit(await applyCommand(ctx(cmd), opts)));
+
+  program
+    .command("capture")
+    .description("import your current Claude config into catalog modules + a personal profile")
+    .option("--out <dir>", "catalog directory to write (default: the --catalog in use)")
+    .option(
+      "--claude-json <path>",
+      "path of .claude.json with user MCP servers (default: ~/.claude.json, or <claude-dir>/.claude.json for a custom --claude-dir)",
+    )
+    .option(
+      "--include <kind>",
+      "only capture these kinds (repeatable or comma-separated): claude-md, settings, statusline, skill, agent, command, output-style, mcp",
+      collect,
+    )
+    .option("--dry-run", "report what would be written without writing")
+    .option("-y, --yes", "write without asking for confirmation")
+    .action(async (opts: CaptureFlags, cmd: Command) =>
+      setExit(await captureCommand(ctx(cmd), opts)),
+    );
 
   program
     .command("status")

@@ -11,6 +11,7 @@ import {
   status,
   unresolvedConflicts,
 } from "@claude-curated/core";
+import { collectSecrets, secretStatus } from "./capture";
 import { askConflicts, type ConflictFlags, conflictsError, parseConflictFlags } from "./conflicts";
 import {
   applyDoc,
@@ -109,13 +110,15 @@ export async function listCommand(ctx: Context): Promise<number> {
 
 export async function planCommand(ctx: Context, flags: PlanFlags): Promise<number> {
   const selection = toSelection(flags);
+  const secrets = secretStatus(ctx.catalog(), selection);
   const result = plan({
     catalog: ctx.catalog(),
     claudeDir: ctx.claudeDir,
     ...selection,
     ...parseConflictFlags(flags),
+    secrets: secrets.values,
   });
-  if (ctx.options.json) writeJson(planDoc(result, selection));
+  if (ctx.options.json) writeJson(planDoc(result, selection, secrets.required));
   else print(`Claude dir: ${ctx.claudeDir}\n\n${renderPlan(result, ctx.colors)}`);
   return EXIT.ok;
 }
@@ -123,8 +126,19 @@ export async function planCommand(ctx: Context, flags: PlanFlags): Promise<numbe
 export async function applyCommand(ctx: Context, flags: ApplyFlags): Promise<number> {
   const selection = toSelection(flags);
   const conflictOptions = parseConflictFlags(flags);
+  const secrets = await collectSecrets(ctx, ctx.catalog(), selection);
+  if (!secrets) {
+    cancel("Nothing was changed.");
+    return EXIT.cancelled;
+  }
   const planFor = () =>
-    plan({ catalog: ctx.catalog(), claudeDir: ctx.claudeDir, ...selection, ...conflictOptions });
+    plan({
+      catalog: ctx.catalog(),
+      claudeDir: ctx.claudeDir,
+      ...selection,
+      ...conflictOptions,
+      secrets,
+    });
   let planned = planFor();
   const open = unresolvedConflicts(planned);
   if (open.length > 0) {

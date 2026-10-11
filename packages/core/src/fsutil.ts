@@ -37,14 +37,16 @@ function tempSibling(path: string): string {
 
 /**
  * Writes `content` to a temp file next to `path`, then renames it over `path`, so readers
- * never see a half-written file. Keeps the mode of an existing regular file.
+ * never see a half-written file. Uses `mode` when given, else keeps the mode of an existing
+ * regular file.
  */
-export function writeFileAtomic(path: string, content: Buffer | string): void {
+export function writeFileAtomic(path: string, content: Buffer | string, mode?: number): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = tempSibling(path);
   try {
     writeFileSync(tmp, content, { flag: "wx" });
-    if (existsSync(path) && !isLink(path)) chmodSync(tmp, statSync(path).mode & 0o7777);
+    if (mode !== undefined) chmodSync(tmp, mode);
+    else if (existsSync(path) && !isLink(path)) chmodSync(tmp, statSync(path).mode & 0o7777);
     renameSync(tmp, path);
   } catch (error) {
     if (occupied(tmp)) unlinkSync(tmp);

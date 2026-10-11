@@ -3,7 +3,8 @@ import { join, resolve } from "node:path";
 import { CatalogError } from "./errors";
 import { isPlainObject } from "./merge";
 import { resolveInside } from "./paths";
-import type { Catalog, CatalogModule, Profile, Selection, Step } from "./types";
+import { SECRET_NAME } from "./secrets";
+import type { Catalog, CatalogModule, ModuleSecret, Profile, Selection, Step } from "./types";
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const VIRTUAL_CLAUDE_DIR = "/__claude_dir__";
@@ -85,6 +86,18 @@ function loadModule(dir: string, dirName: string): CatalogModule {
   }
   if (raw.tags !== undefined && !isStringArray(raw.tags)) fail("tags must be strings");
   if (raw.requires !== undefined && !isStringArray(raw.requires)) fail("requires must be strings");
+  if (raw.secrets !== undefined) {
+    const ok =
+      Array.isArray(raw.secrets) &&
+      raw.secrets.every(
+        (secret) =>
+          isPlainObject(secret) &&
+          typeof secret.name === "string" &&
+          SECRET_NAME.test(secret.name) &&
+          typeof secret.description === "string",
+      );
+    if (!ok) fail("secrets must be [{ name: CCC_SECRET_*, description }]");
+  }
   if (!Array.isArray(raw.steps)) fail("steps must be an array");
   const steps = (raw.steps as unknown[]).map((step, index) =>
     validateStep(step, dir, `module "${dirName}" step ${index + 1}`),
@@ -95,6 +108,7 @@ function loadModule(dir: string, dirName: string): CatalogModule {
     description: raw.description as string,
     tags: raw.tags as string[] | undefined,
     requires: raw.requires as string[] | undefined,
+    ...(raw.secrets ? { secrets: raw.secrets as unknown as ModuleSecret[] } : {}),
     steps,
     dir,
   };

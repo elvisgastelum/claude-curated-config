@@ -41,8 +41,8 @@ Strategy: `single-pr` (user decision 2026-10-11). Create public repo elvisgastel
 | T5 | install.sh, README, AGENTS.md, CLAUDE.md | delegated | [x] | e441ca7 |
 | T6 | Review fixes (recursive deny globs, pin context7, unique backups, dry-run shows blocked, dangling symlinks, per-step errors, atomic writes, installer cleanup, docstring/dup cleanups) | delegated | [x] | 4c8d3d4 |
 | T7 | Explicit profile order (`order` field; minimal first) | delegated | [x] | f0a63fe |
-| T8 | json-merge conflict detection: TUI asks per conflict; `--cli` fails exit 2 listing conflicts unless `--on-conflict catalog\|keep` or `--resolve <module>:<json.path>=catalog\|keep` | delegated | [x] | (see Progress) |
-| T9 | `ccc capture`: import current ~/.claude into catalog modules + `personal` profile; secrets redacted to `${VAR}` placeholders filled at apply (TUI prompt / env in agent mode) | delegated | [ ] | |
+| T8 | json-merge conflict detection: TUI asks per conflict; `--cli` fails exit 2 listing conflicts unless `--on-conflict catalog\|keep` or `--resolve <module>:<json.path>=catalog\|keep` | delegated | [x] | e8a257a |
+| T9 | `ccc capture`: import current ~/.claude into catalog modules + `personal` profile; secrets redacted to `${VAR}` placeholders filled at apply (TUI prompt / env in agent mode) | delegated | [x] | (see Progress) |
 
 Route evidence: empty repo, 5 tasks across many non-trivial files → one bounded writer (mandatory writer trigger).
 
@@ -63,6 +63,8 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 - T7: RED observed (4 failing: core order sort + validation, seed catalog order, CLI list order), GREEN 46/46. `Profile.order?: number` validated in the loader; `loadCatalog` sorts profiles by order (missing = last), then id, so `list`, `list --json` and the TUI share one order. `minimal` 10, `full` 20.
 
 - T8: RED observed (7 failing: findConflicts pointers/type change, plan conflicts + apply refusal, keep idempotent, catalog policy + explicit override, CLI exit 2 + resolved apply, malformed --resolve), GREEN 53/53. Paths are RFC 6901 JSON pointers; keys `<module>:<pointer>`. `Plan.conflicts` (+ `resolutions`, `onConflict` carried so apply re-evaluates with the same decisions); core refuses a step with undecided conflicts (`failed`). CLI: `--on-conflict`, repeatable `--resolve` (validated, exit 2 `invalid_resolve`), `ccc.error/v1` `conflicts_unresolved` with `error.conflicts[].flags` shell-quoted; `plan --json` always has `conflicts`. TUI and interactive `ccc apply` prompt per conflict with all-remaining shortcuts. Decisions are not persisted (open question).
+
+- T9: core RED observed (8 failing: findSecrets, scan, include filter, write + redaction, idempotent/prune, dry-run, apply substitution, command args), GREEN; CLI capture tests were written after the CLI wiring (no separate RED), GREEN 63/63. Core `secrets.ts` (key-name + shape + entropy>4 detection, `Redactor` with deterministic `CCC_SECRET_<PREFIX>_<KEY>` names, auth scheme kept, env refs kept, argv `--flag value`/`KEY=value`), `capture.ts` (`captureClaudeConfig` + idempotent `writeCapture` with stale-file pruning and `profiles/personal.json` order 30). Engine: module `secrets`, `plan({ secrets })` substitutes in json-merge sources, text files and command args, missing value = blocked step, plan keeps values non-enumerable, messages and conflict values masked; copied files keep the source mode. CLI: `ccc capture` (`ccc.capture/v1`, exit 2 without --yes, TUI groupMultiselect + redaction note + confirm), `secrets_missing` exit 2, `plan --json` `secrets[].provided`, TUI/interactive apply prompt with masked `password`. TTY smoke (expect, temp HOME): capture TUI wrote 3 modules, apply prompted for the secret, value absent from the log.
 
 ## Follow-ups (advisory review findings → scheduled as T6/T7)
 - R1: `core-settings` deny rules are `./`-anchored; use `**/.env`, `**/.env.*`, `**/secrets/**`.

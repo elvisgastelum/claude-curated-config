@@ -52,6 +52,19 @@ Rules:
 - Give every `command` step a `check` so re-running is idempotent.
 - `requires` lists modules that must be applied first; cycles are rejected.
 
+## Secrets
+
+A module that needs a secret declares it and uses a `${CCC_SECRET_<NAME>}` placeholder in a json-merge source, a copied text file or a command argument:
+
+```json
+{
+  "secrets": [{ "name": "CCC_SECRET_GITHUB_TOKEN", "description": "GitHub token for the MCP server" }],
+  "steps": [{ "type": "command", "run": ["claude", "mcp", "add-json", "--scope", "user", "github", "{\"headers\":{\"Authorization\":\"Bearer ${CCC_SECRET_GITHUB_TOKEN}\"}}"] }]
+}
+```
+
+`ccc` fills placeholders at apply time (TUI prompt, or the environment variable of the same name in `--cli` mode). `ccc capture` generates these automatically. Symlinked files are not substituted.
+
 ## Add a profile
 
 Create `profiles/<id>.json`:

@@ -36,6 +36,7 @@ Press Ctrl+C at any prompt to leave without further changes.
 | `ccc apply --module <id> --module <id>` | Applies specific modules (and what they require). |
 | `ccc status` | Shows which modules are applied, partial or not applied. |
 | `ccc doctor` | Checks Node, git, the `claude` CLI and the target directory. |
+| `ccc capture` | Imports your current config into catalog modules and a `personal` profile. |
 
 Global flags:
 
@@ -58,6 +59,7 @@ Exit codes: `0` ok, `1` a step failed (or, with `--dry-run`, would fail), `2` us
 |---------|---------|
 | `minimal` | `core-settings`, `global-instructions` |
 | `full` | everything in the catalog |
+| `personal` | your captured modules (after `ccc capture`) |
 
 Profiles are listed in the TUI and `ccc list` by their `order` field (lowest first).
 
@@ -80,7 +82,32 @@ To add your own, see [packages/catalog/README.md](packages/catalog/README.md).
 - `json-merge` keeps your existing keys and array entries and adds what the catalog defines. When one of your values differs from the catalog value, `ccc` asks which to keep (TUI) or refuses with exit `2` until you pass `--resolve`/`--on-conflict` (CLI). Nothing is written until every conflict is decided.
 - Idempotent: a second apply reports everything `unchanged`.
 - `--dry-run` and `plan` never write anything.
-- The catalog contains no secrets.
+- The catalog contains no secrets: captured secrets are replaced with `${CCC_SECRET_*}` placeholders and filled in at apply time.
+
+## Capture your current setup
+
+Turn the Claude Code config you already have into catalog modules, so you can commit it and apply it on other machines:
+
+```sh
+ccc capture                         # TUI: pick items, review redactions, write
+ccc capture --dry-run               # preview without writing
+ccc --cli capture --yes --json      # non-interactive (agents, scripts)
+```
+
+It reads `~/.claude` (`CLAUDE.md`, `settings.json`, the status line script referenced by settings, `skills/*/`, `agents/*.md`, `commands/**/*.md`, `output-styles/*.md`) and the user-scope `mcpServers` from `~/.claude.json`, and writes one module per item into the catalog (`personal-settings`, `personal-claude-md`, `personal-skill-<name>`, `personal-mcp-<name>`, ...) plus a `personal` profile. Caches and state (`projects/`, `todos/`, `plugins/`, `history*`, logs, `.ccc-backups/`, ...) are ignored; plugins are captured through `enabledPlugins` and `extraKnownMarketplaces` in `settings.json`. MCP servers become `claude mcp add-json --scope user` commands.
+
+Secrets are never written. Values under secret-looking keys (`token`, `secret`, `password`, `api_key`, `auth`, ...) and strings shaped like credentials (`sk-...`, `ghp_...`, `github_pat_...`, `xox?-...`, `AKIA...`, private keys, JWTs, long random strings) become `${CCC_SECRET_<NAME>}` placeholders, and the module declares them under `secrets`. Values that only reference environment variables (`${GITHUB_TOKEN}`) are kept. Capture prints every redaction (where and which placeholder, never the value).
+
+Applying a module with secrets asks for each value in the TUI (masked input); in `--cli` mode it reads the environment variable of the same name and exits `2` (`secrets_missing`, listing the names) when one is missing, before writing anything.
+
+Re-running capture updates the personal modules in place (unchanged files are not rewritten). Always review the result with `git diff` before committing.
+
+| Flag | Meaning |
+|------|---------|
+| `--out <dir>` | Catalog directory to write (default: the catalog in use, `--catalog` or the bundled one). |
+| `--claude-json <path>` | Where to read user MCP servers (default `~/.claude.json`, or `<claude-dir>/.claude.json` for a custom `--claude-dir`). |
+| `--include <kind>` | Only these kinds (repeatable): `claude-md`, `settings`, `statusline`, `skill`, `agent`, `command`, `output-style`, `mcp`. |
+| `--dry-run`, `--yes` | Preview / write without confirmation (required outside a terminal). |
 
 ## Agents
 

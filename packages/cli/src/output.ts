@@ -83,7 +83,14 @@ export function listDoc(catalog: Catalog) {
   };
 }
 
-export function planDoc(plan: Plan, selection: Selection) {
+export interface SecretState {
+  name: string;
+  description: string;
+  module: string;
+  provided: boolean;
+}
+
+export function planDoc(plan: Plan, selection: Selection, secrets: SecretState[] = []) {
   return {
     schema: "ccc.plan/v1",
     claudeDir: plan.claudeDir,
@@ -95,6 +102,7 @@ export function planDoc(plan: Plan, selection: Selection) {
       steps: m.steps.map(({ step: _step, ...rest }) => ({ blocked: false, ...rest })),
     })),
     conflicts: plan.conflicts,
+    secrets,
   };
 }
 

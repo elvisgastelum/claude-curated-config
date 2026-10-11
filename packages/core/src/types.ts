@@ -27,12 +27,21 @@ export interface CommandStep {
 
 export type Step = FileStep | JsonMergeStep | CommandStep;
 
+/** A value a module needs at apply time, referenced as `${NAME}` in its assets and args. */
+export interface ModuleSecret {
+  /** Environment variable name, `CCC_SECRET_*`. */
+  name: string;
+  description: string;
+}
+
 export interface Module {
   id: string;
   name: string;
   description: string;
   tags?: string[];
   requires?: string[];
+  /** Secrets substituted into json-merge sources, text files and command args. */
+  secrets?: ModuleSecret[];
   steps: Step[];
 }
 
@@ -121,6 +130,8 @@ export interface Plan {
   /** Decisions used to plan; apply re-evaluates with the same ones. */
   resolutions?: Resolutions;
   onConflict?: ConflictPolicy;
+  /** Secret values used to plan (non-enumerable: never serialized). */
+  readonly secretValues?: Record<string, string>;
 }
 
 export type StepStatus = "done" | "unchanged" | "skipped" | "failed" | "planned";

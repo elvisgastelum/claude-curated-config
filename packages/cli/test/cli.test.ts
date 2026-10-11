@@ -4,14 +4,17 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { FAKE_SECRETS, writeClaudeFixture } from "../../core/test/capture-fixture";
 
 const BIN = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const temps: string[] = [];
@@ -282,5 +285,95 @@ describe("ccc --cli", () => {
     expect(ran.code).toBe(0);
     expect(actions(ran.json())).toEqual(["run"]);
     expect(readFileSync(log, "utf8")).toContain("mcp add --scope user context7");
+  });
+
+  it("captures a claude dir into a catalog without leaking secrets, then applies it", () => {
+    const home = temp();
+    const claudeDir = join(home, ".claude");
+    writeClaudeFixture(claudeDir, join(home, ".claude.json"), "~/.claude/statusline.sh");
+    const out = join(temp(), "catalog");
+    mkdirSync(out);
+    const env = { HOME: home };
+    const base = ["--cli", "capture", "--json", "--claude-dir", claudeDir, "--out", out];
+
+    const refused = ccc(base, env);
+    expect(refused.code).toBe(2);
+    expect((refused.json().error as { code: string }).code).toBe("confirmation_required");
+
+    const dry = ccc([...base, "--dry-run"], env);
+    expect(dry.code).toBe(0);
+    expect(dry.json().dryRun).toBe(true);
+    expect(readdirSync(out)).toEqual([]);
+
+    const run = ccc([...base, "--yes"], env);
+    expect(run.code).toBe(0);
+    const doc = run.json();
+    expect(doc.schema).toBe("ccc.capture/v1");
+    expect((doc.items as { id: string }[]).map((i) => i.id)).toContain("personal-statusline");
+    expect((doc.items as { id: string }[]).map((i) => i.id)).toContain("personal-mcp-github");
+    expect((doc.redactions as unknown[]).length).toBeGreaterThan(0);
+    for (const secret of FAKE_SECRETS) {
+      expect(run.stdout).not.toContain(secret);
+      expect(run.stderr).not.toContain(secret);
+    }
+    for (const file of readdirSync(out, { recursive: true, withFileTypes: true })) {
+      if (!file.isFile()) continue;
+      const text = readFileSync(join(file.parentPath, file.name), "utf8");
+      for (const secret of FAKE_SECRETS) expect(text).not.toContain(secret);
+    }
+    const again = ccc([...base, "--yes"], env).json();
+    expect((again.items as { action: string }[]).every((item) => item.action === "unchanged")).toBe(
+      true,
+    );
+
+    const target = join(temp(), "claude");
+    const applyArgs = [
+      "--cli",
+      "apply",
+      "--profile",
+      "personal",
+      "--yes",
+      "--json",
+      "--catalog",
+      out,
+      "--claude-dir",
+      target,
+    ];
+    const missing = ccc(applyArgs, env);
+    expect(missing.code).toBe(2);
+    const error = missing.json().error as { code: string; secrets: { name: string }[] };
+    expect(error.code).toBe("secrets_missing");
+    expect(error.secrets.map((s) => s.name)).toContain("CCC_SECRET_SETTINGS_ANTHROPIC_API_KEY");
+    expect(existsSync(target)).toBe(false);
+
+    const planned = ccc(
+      [
+        "--cli",
+        "plan",
+        "--profile",
+        "personal",
+        "--json",
+        "--catalog",
+        out,
+        "--claude-dir",
+        target,
+      ],
+      env,
+    ).json();
+    expect((planned.secrets as { provided: boolean }[]).every((s) => !s.provided)).toBe(true);
+
+    const values = Object.fromEntries(error.secrets.map((s) => [s.name, `env-${s.name}`]));
+    const applied = ccc(applyArgs, { ...env, ...values });
+    expect(applied.code).toBe(0);
+    expect(applied.stdout).not.toContain("env-CCC_SECRET");
+    const settings = JSON.parse(readFileSync(join(target, "settings.json"), "utf8"));
+    expect(settings.env.ANTHROPIC_API_KEY).toBe("env-CCC_SECRET_SETTINGS_ANTHROPIC_API_KEY");
+    expect(statSync(join(target, "statusline.sh")).mode & 0o100).toBe(0o100);
+  });
+
+  it("rejects an unknown capture kind with exit 2", () => {
+    const run = ccc(["--cli", "capture", "--include", "nope", "--dry-run", "--json"]);
+    expect(run.code).toBe(2);
+    expect((run.json().error as { code: string }).code).toBe("invalid_include");
   });
 });

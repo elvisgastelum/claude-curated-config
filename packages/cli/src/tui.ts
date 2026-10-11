@@ -18,6 +18,7 @@ import {
   status,
   unresolvedConflicts,
 } from "@claude-curated/core";
+import { captureCommand, collectSecrets } from "./capture";
 import type { Context } from "./commands";
 import { askConflicts } from "./conflicts";
 import { EXIT, pendingCount, renderPlan } from "./output";
@@ -60,9 +61,16 @@ export async function runTui(ctx: Context, version: string): Promise<number> {
         options: [
           { value: "profile", label: "Profile", hint: "a curated set of modules" },
           { value: "modules", label: "Pick modules", hint: "choose individual modules" },
+          {
+            value: "capture",
+            label: "Capture my current setup",
+            hint: "import this machine's config into the catalog",
+          },
         ],
       }),
     );
+
+    if (how === "capture") return await captureCommand(ctx, {});
 
     let selection: Selection;
     if (how === "profile") {
@@ -93,14 +101,16 @@ export async function runTui(ctx: Context, version: string): Promise<number> {
       selection = { modules };
     }
 
-    let planned = plan({ catalog, claudeDir: ctx.claudeDir, ...selection });
+    const secrets = await collectSecrets(ctx, catalog, selection, { prompt: true });
+    if (!secrets) throw new Cancelled();
+    let planned = plan({ catalog, claudeDir: ctx.claudeDir, ...selection, secrets });
     note(renderPlan(planned, c), "Plan");
     const open = unresolvedConflicts(planned);
     if (open.length > 0) {
       log.warn(`${open.length} setting(s) in your files differ from the catalog.`);
       const resolutions = await askConflicts(open, c);
       if (!resolutions) throw new Cancelled();
-      planned = plan({ catalog, claudeDir: ctx.claudeDir, ...selection, resolutions });
+      planned = plan({ catalog, claudeDir: ctx.claudeDir, ...selection, resolutions, secrets });
     }
     if (pendingCount(planned) === 0) {
       outro(c.green("Everything is already up to date."));

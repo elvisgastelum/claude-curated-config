@@ -42,6 +42,27 @@ Rules:
 - Do not edit files under `~/.claude` by hand to "help" the tool; re-run it instead.
 - Report the result: modules applied, steps per status, the `backupDir` if any, and any `skipped` or `failed` step with its `message`.
 
+### Secrets
+
+Modules may declare `secrets` (`CCC_SECRET_*` names). `ccc --cli plan --json` lists them under `secrets` with `provided`. `apply` reads each from the environment variable of the same name; if any is missing it exits `2` with `ccc.error/v1` code `secrets_missing` and `error.secrets: [{ name, description, module }]`, writing nothing. Ask the human to export the values (or run `ccc` in a terminal, which prompts with masked input). Never print, log or commit secret values.
+
+## Capture a machine's setup into the catalog
+
+Use when asked to "save/capture my Claude setup" into this repo.
+
+```sh
+ccc --cli capture --out <repo>/packages/catalog --dry-run --json   # 1. preview
+ccc --cli capture --out <repo>/packages/catalog --yes --json       # 2. write modules + profiles/personal.json
+git -C <repo> diff --stat && git -C <repo> diff   # 3. review
+```
+
+Rules:
+
+- Pass `--out <your clone>/packages/catalog` so the modules land in the git checkout you will commit from. Without `--out` they go to the catalog `ccc` is using (for the installed `ccc`, the installer's checkout).
+- Before committing, show the human the `redactions` list (module, location, placeholder) and the `git diff`, and get their go-ahead. If you spot a secret that was not redacted, stop and tell them; do not commit it.
+- Output is `ccc.capture/v1`: `{ claudeDir, claudeJson, outDir, dryRun, items: [{ id, kind, source, action, files, secrets }], redactions: [{ module, location, placeholder }], warnings, profile: { id, path, action, modules } }`. It never contains secret values.
+- Without `--yes` (and without `--dry-run`) a non-interactive capture exits `2` (`confirmation_required`).
+
 ### Exit codes
 
 | Code | Meaning | What to do |
