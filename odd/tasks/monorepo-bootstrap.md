@@ -29,7 +29,7 @@ Setting up Claude Code on a new machine is manual (settings, CLAUDE.md, skills, 
 - `install.sh` clones/updates, builds, links `~/.local/bin/ccc`, forwards args.
 
 ## Delivery
-Strategy: `ask-on-risk`. Forecast ~1500 authored lines (exceeds 400 → chain strategy to be asked before PRs). Push/PR are user decisions.
+Strategy: `single-pr` (user decision 2026-10-11). Create public repo elvisgastelum/claude-curated-config, push `main` + this branch, open one PR after T6–T9 land.
 
 ## Tasks
 | ID | Task | Route | Status | Commit |
@@ -39,6 +39,10 @@ Strategy: `ask-on-risk`. Forecast ~1500 authored lines (exceeds 400 → chain st
 | T3 | Seed catalog modules + profiles | delegated | [x] | 310b190 |
 | T4 | CLI: commander `--cli` + JSON + clack TUI + integration test | delegated | [x] | 0c37e61 |
 | T5 | install.sh, README, AGENTS.md, CLAUDE.md | delegated | [x] | e441ca7 |
+| T6 | Review fixes (recursive deny globs, pin context7, unique backups, dry-run shows blocked, dangling symlinks, per-step errors, atomic writes, installer cleanup, docstring/dup cleanups) | delegated | [ ] | |
+| T7 | Explicit profile order (`order` field; minimal first) | delegated | [ ] | |
+| T8 | json-merge conflict detection: TUI asks per conflict; `--cli` fails exit 2 listing conflicts unless `--on-conflict catalog\|keep` or `--resolve <module>:<json.path>=catalog\|keep` | delegated | [ ] | |
+| T9 | `ccc capture`: import current ~/.claude into catalog modules + `personal` profile; secrets redacted to `${VAR}` placeholders filled at apply (TUI prompt / env in agent mode) | delegated | [ ] | |
 
 Route evidence: empty repo, 5 tasks across many non-trivial files → one bounded writer (mandatory writer trigger).
 
@@ -54,7 +58,7 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 - Parent spot check: `pnpm test` → 37/37 passed. `.atl/` (local skill registry) added to `.gitignore` (chore commit) so the review candidate has no untracked files.
 - Native review (RDD on, risk high: install.sh executable + shell process): standing consent granted, four lenses, **approved**, acknowledged (lineage review-ebece59909012874, authority burned). No blocking findings.
 
-## Follow-ups (advisory review findings, not yet scheduled)
+## Follow-ups (advisory review findings → scheduled as T6/T7)
 - R1: `core-settings` deny rules are `./`-anchored; use `**/.env`, `**/.env.*`, `**/secrets/**`.
 - R1: pin `@upstash/context7-mcp` version in `mcp-context7`.
 - R3: backups can collide on the same timestamp; dry-run hides `blocked` steps; an evaluate throw aborts the whole apply; blocked path untested; CLI tests may run a stale `dist`.
@@ -63,4 +67,4 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 - Product: explicit profile order (minimal first in TUI); decide json-merge conflict rule (catalog wins vs keep user value); `ccc capture` to import the current `~/.claude` into the catalog.
 
 ## Next step
-All tasks done on `feat/monorepo-bootstrap`. Forecast exceeded ~400 lines: ask for the chain strategy (`stacked-to-main` or `feature-branch-chain`) before opening PRs. Push/PR are user decisions.
+Writer implements T6–T9 (one commit each), then parent creates the public repo, pushes, and opens a single PR.
