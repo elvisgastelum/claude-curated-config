@@ -42,7 +42,7 @@ Strategy: `single-pr` (user decision 2026-10-11). Create public repo elvisgastel
 | T6 | Review fixes (recursive deny globs, pin context7, unique backups, dry-run shows blocked, dangling symlinks, per-step errors, atomic writes, installer cleanup, docstring/dup cleanups) | delegated | [x] | 4c8d3d4 |
 | T7 | Explicit profile order (`order` field; minimal first) | delegated | [x] | f0a63fe |
 | T8 | json-merge conflict detection: TUI asks per conflict; `--cli` fails exit 2 listing conflicts unless `--on-conflict catalog\|keep` or `--resolve <module>:<json.path>=catalog\|keep` | delegated | [x] | e8a257a |
-| T9 | `ccc capture`: import current ~/.claude into catalog modules + `personal` profile; secrets redacted to `${VAR}` placeholders filled at apply (TUI prompt / env in agent mode) | delegated | [x] | (see Progress) |
+| T9 | `ccc capture`: import current ~/.claude into catalog modules + `personal` profile; secrets redacted to `${VAR}` placeholders filled at apply (TUI prompt / env in agent mode) | delegated | [x] | 5de5a65 |
 
 Route evidence: empty repo, 5 tasks across many non-trivial files → one bounded writer (mandatory writer trigger).
 
@@ -66,6 +66,9 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 
 - T9: core RED observed (8 failing: findSecrets, scan, include filter, write + redaction, idempotent/prune, dry-run, apply substitution, command args), GREEN; CLI capture tests were written after the CLI wiring (no separate RED), GREEN 63/63. Core `secrets.ts` (key-name + shape + entropy>4 detection, `Redactor` with deterministic `CCC_SECRET_<PREFIX>_<KEY>` names, auth scheme kept, env refs kept, argv `--flag value`/`KEY=value`), `capture.ts` (`captureClaudeConfig` + idempotent `writeCapture` with stale-file pruning and `profiles/personal.json` order 30). Engine: module `secrets`, `plan({ secrets })` substitutes in json-merge sources, text files and command args, missing value = blocked step, plan keeps values non-enumerable, messages and conflict values masked; copied files keep the source mode. CLI: `ccc capture` (`ccc.capture/v1`, exit 2 without --yes, TUI groupMultiselect + redaction note + confirm), `secrets_missing` exit 2, `plan --json` `secrets[].provided`, TUI/interactive apply prompt with masked `password`. TTY smoke (expect, temp HOME): capture TUI wrote 3 modules, apply prompted for the secret, value absent from the log.
 
+- T6-T9 final verification: pnpm install 0, pnpm build 0, pnpm typecheck 0, pnpm lint 0 (49 files), pnpm test 0 (63/63), bash -n install.sh 0. Manual (temp HOME/dirs only, no real claude): apply minimal twice -> done,done then unchanged,unchanged (backupDir null); conflicting `$schema` -> exit 2 `conflicts_unresolved` with `--resolve 'core-settings:/$schema=keep'`, only settings.json present; `--on-conflict keep` -> exit 0, user `$schema` kept; capture of a fixture dir + fixture claude.json -> 3 modules, 3 redactions, `grep -r` of the fake secret in output and JSON = 0 matches.
+- Open questions: persist conflict decisions between runs?; `--out` default for the installed `ccc` is the installer checkout (a later `git pull --ff-only` update may then refuse); absolute statusLine paths are only warned about, not rewritten.
+
 ## Follow-ups (advisory review findings → scheduled as T6/T7)
 - R1: `core-settings` deny rules are `./`-anchored; use `**/.env`, `**/.env.*`, `**/secrets/**`.
 - R1: pin `@upstash/context7-mcp` version in `mcp-context7`.
@@ -75,4 +78,4 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 - Product: explicit profile order (minimal first in TUI); decide json-merge conflict rule (catalog wins vs keep user value); `ccc capture` to import the current `~/.claude` into the catalog.
 
 ## Next step
-Writer implements T6–T9 (one commit each), then parent creates the public repo, pushes, and opens a single PR.
+Parent reviews T6-T9 (commits 4c8d3d4, f0a63fe, e8a257a, 5de5a65), then creates the public repo, pushes, and opens a single PR.
