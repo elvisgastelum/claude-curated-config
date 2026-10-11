@@ -38,7 +38,7 @@ Strategy: `ask-on-risk`. Forecast ~1500 authored lines (exceeds 400 → chain st
 | T2 | Core engine + unit tests | delegated | [x] | a81a65a |
 | T3 | Seed catalog modules + profiles | delegated | [x] | 310b190 |
 | T4 | CLI: commander `--cli` + JSON + clack TUI + integration test | delegated | [x] | 0c37e61 |
-| T5 | install.sh, README, AGENTS.md, CLAUDE.md | delegated | [x] | (see final evidence commit) |
+| T5 | install.sh, README, AGENTS.md, CLAUDE.md | delegated | [x] | e441ca7 |
 
 Route evidence: empty repo, 5 tasks across many non-trivial files → one bounded writer (mandatory writer trigger).
 
