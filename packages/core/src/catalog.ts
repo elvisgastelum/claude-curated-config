@@ -4,10 +4,11 @@ import { CatalogError } from "./errors";
 import { isPlainObject } from "./merge";
 import { resolveInside } from "./paths";
 import { PROVIDES_KINDS } from "./provides";
-import { SECRET_NAME } from "./secrets";
+import { INPUT_NAME, SECRET_NAME } from "./secrets";
 import {
   type Catalog,
   type CatalogModule,
+  type ModuleInput,
   type ModuleProvides,
   type ModuleSecret,
   type Profile,
@@ -19,6 +20,18 @@ import {
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const VIRTUAL_CLAUDE_DIR = "/__claude_dir__";
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** Environment names ccc sets or relies on: never module inputs. */
+const RESERVED_INPUTS = new Set([
+  "HOME",
+  "PATH",
+  "SHELL",
+  "USER",
+  "CCC_CLAUDE_DIR",
+  "CCC_CLAUDE_JSON",
+  "CCC_PLATFORM",
+  "CCC_HOME",
+  "CLAUDE_CONFIG_DIR",
+]);
 
 function readJson(file: string, code: "invalid_module" | "invalid_profile"): unknown {
   try {
@@ -199,6 +212,21 @@ function loadModule(dir: string, dirName: string): CatalogModule {
       );
     if (!ok) fail("secrets must be [{ name: CCC_SECRET_*, description }]");
   }
+  if (raw.inputs !== undefined) {
+    const ok =
+      Array.isArray(raw.inputs) &&
+      raw.inputs.every(
+        (input) =>
+          isPlainObject(input) &&
+          typeof input.name === "string" &&
+          INPUT_NAME.test(input.name) &&
+          typeof input.description === "string",
+      );
+    if (!ok) fail("inputs must be [{ name: UPPER_CASE (not CCC_SECRET_*), description }]");
+    for (const input of raw.inputs as { name: string }[]) {
+      if (RESERVED_INPUTS.has(input.name)) fail(`inputs: ${input.name} is reserved`);
+    }
+  }
   const provides = raw.provides === undefined ? undefined : validateProvides(raw.provides, fail);
   if (!Array.isArray(raw.steps)) fail("steps must be an array");
   const steps = (raw.steps as unknown[]).map((step, index) =>
@@ -211,6 +239,7 @@ function loadModule(dir: string, dirName: string): CatalogModule {
     tags: raw.tags as string[] | undefined,
     requires: raw.requires as string[] | undefined,
     ...(raw.secrets ? { secrets: raw.secrets as unknown as ModuleSecret[] } : {}),
+    ...(raw.inputs ? { inputs: raw.inputs as unknown as ModuleInput[] } : {}),
     ...(provides ? { provides } : {}),
     steps,
     dir,

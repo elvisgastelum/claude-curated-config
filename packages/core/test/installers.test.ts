@@ -10,6 +10,7 @@ import {
   findManagedBlocks,
   loadCatalog,
   plan,
+  requiredSecrets,
   stripManagedBlocks,
   writeCapture,
 } from "../src/index";
@@ -592,5 +593,88 @@ describe("doctor installer prerequisites", () => {
     expect(brew?.ok).toBe(false);
     expect(brew?.message).toMatch(/Linux/);
     expect(report.checks.find((c) => c.id === "curl")?.ok).toBe(false);
+  });
+});
+
+describe("module inputs", () => {
+  const inputModule = (log: string) => ({
+    id: "kaneo",
+    inputs: [{ name: "SERVICE_URL", description: "Base URL of your instance" }],
+    steps: [
+      {
+        type: "command",
+        shell: `echo "url=$SERVICE_URL" >> '${log}'`,
+        env: { SERVICE_URL: `\${SERVICE_URL}` },
+      },
+    ],
+  });
+
+  it("validates input names", () => {
+    const load = (inputs: unknown) =>
+      loadCatalog(writeCatalog([{ id: "m", steps: [], inputs: inputs as never }]));
+    expect(() => load([{ name: "lower", description: "x" }])).toThrow(/inputs/);
+    expect(() => load([{ name: "CCC_SECRET_X", description: "x" }])).toThrow(/inputs/);
+    expect(() => load([{ name: "PATH", description: "x" }])).toThrow(/reserved/);
+    expect(() => load([{ name: "SERVICE_URL" }])).toThrow(/inputs/);
+    expect(load([{ name: "SERVICE_URL", description: "x" }]).modules[0]?.inputs).toEqual([
+      { name: "SERVICE_URL", description: "x" },
+    ]);
+  });
+
+  it("lists inputs as non-secret values and expands them in command env", () => {
+    const log = join(tempDir(), "log");
+    const catalog = loadCatalog(writeCatalog([inputModule(log)]));
+    const env = { PATH: "/usr/bin:/bin" };
+    expect(requiredSecrets(catalog, { modules: ["kaneo"] })).toEqual([
+      {
+        name: "SERVICE_URL",
+        description: "Base URL of your instance",
+        module: "kaneo",
+        secret: false,
+      },
+    ]);
+
+    const missing = plan({ catalog, claudeDir: tempDir(), modules: ["kaneo"], env });
+    const step = missing.modules[0]?.steps[0];
+    expect(step).toMatchObject({ action: "skip", blocked: true, needsSecret: "SERVICE_URL" });
+    expect(step?.reason).toMatch(/missing input SERVICE_URL/);
+    const dry = apply(missing, { dryRun: true, env });
+    expect(dry.modules[0]?.steps[0]).toMatchObject({
+      status: "planned",
+      message: "needs input SERVICE_URL",
+    });
+
+    const values = { SERVICE_URL: "https://svc.example.test" };
+    const result = apply(
+      plan({ catalog, claudeDir: tempDir(), modules: ["kaneo"], env, secrets: values }),
+      { env },
+    );
+    expect(result.modules[0]?.steps[0]?.status).toBe("done");
+    expect(readFileSync(log, "utf8")).toBe("url=https://svc.example.test\n");
+    // A caller env var of the same name is not used: inputs come only from values.
+    const ignored = plan({
+      catalog,
+      claudeDir: tempDir(),
+      modules: ["kaneo"],
+      env: { ...env, SERVICE_URL: "https://elsewhere.test" },
+    });
+    expect(ignored.modules[0]?.steps[0]?.needsSecret).toBe("SERVICE_URL");
+  });
+
+  it("substitutes CCC_INPUT_* placeholders like secrets", () => {
+    const claudeDir = tempDir();
+    const catalog = loadCatalog(
+      writeCatalog([
+        {
+          id: "hosts",
+          inputs: [{ name: "CCC_INPUT_HOST", description: "a host" }],
+          files: { "notes.md": `host: \${CCC_INPUT_HOST}\n` },
+          steps: [{ type: "file", src: "notes.md", dest: "notes.md" }],
+        },
+      ]),
+    );
+    const secrets = { CCC_INPUT_HOST: "box.example.test" };
+    apply(plan({ catalog, claudeDir, modules: ["hosts"], secrets }));
+    expect(readFileSync(join(claudeDir, "notes.md"), "utf8")).toBe("host: box.example.test\n");
   });
 });

@@ -15,6 +15,7 @@ import {
 import { changedPaths, deepMerge, findConflicts } from "./merge";
 import { claudeJsonFor, resolveDest, resolveInside } from "./paths";
 import {
+  isSecretName,
   MissingSecretError,
   maskJson,
   maskValues,
@@ -101,16 +102,26 @@ function bashArgv(script: string): string[] {
 
 const EXPANSION = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}|\$HOME\b/g;
 
+/** Names of the values a module declares (secrets and inputs). */
+function declaredNames(mod: CatalogModule): Set<string> {
+  return new Set([...(mod.secrets ?? []), ...(mod.inputs ?? [])].map((value) => value.name));
+}
+
 /**
- * Expands a command `env` value: `${CCC_SECRET_*}` (throws {@link MissingSecretError}),
- * `${CCC_CLAUDE_DIR}`, `${CCC_CLAUDE_JSON}`, `$HOME`, `${HOME}`, a leading `~/`, and
- * `${NAME:-default}` from the caller's environment. Anything else is left as is.
+ * Expands a command `env` value: `${CCC_SECRET_*}`, `${CCC_INPUT_*}` and `${NAME}` for a
+ * module input (throw {@link MissingSecretError} without a value), `${CCC_CLAUDE_DIR}`,
+ * `${CCC_CLAUDE_JSON}`, `$HOME`, `${HOME}`, a leading `~/`, and `${NAME:-default}` from the
+ * caller's environment. Anything else is left as is.
  */
-function expandValue(value: string, ctx: EvalContext): string {
+function expandValue(value: string, ctx: EvalContext, declared: Set<string>): string {
   const home = homeOf(ctx.env);
   const expanded = value.replace(EXPANSION, (whole, name?: string, fallback?: string) => {
     if (!name || name === "HOME") return home;
-    if (name.startsWith("CCC_SECRET_")) return substitute(whole, ctx.secrets);
+    if (/^CCC_(SECRET|INPUT)_/.test(name) || declared.has(name)) {
+      const provided = ctx.secrets[name];
+      if (provided === undefined) throw new MissingSecretError(name);
+      return provided;
+    }
     if (name === "CCC_CLAUDE_DIR") return ctx.claudeDir;
     if (name === "CCC_CLAUDE_JSON") return claudeJsonFor(ctx.claudeDir, home);
     if (fallback !== undefined) return ctx.env[name] || fallback;
@@ -120,9 +131,14 @@ function expandValue(value: string, ctx: EvalContext): string {
 }
 
 /** The environment a command step runs with. */
-function commandEnv(step: Extract<Step, { type: "command" }>, ctx: EvalContext): NodeJS.ProcessEnv {
+function commandEnv(
+  step: Extract<Step, { type: "command" }>,
+  mod: CatalogModule,
+  ctx: EvalContext,
+): NodeJS.ProcessEnv {
+  const declared = declaredNames(mod);
   const extra = Object.fromEntries(
-    Object.entries(step.env ?? {}).map(([key, value]) => [key, expandValue(value, ctx)]),
+    Object.entries(step.env ?? {}).map(([key, value]) => [key, expandValue(value, ctx, declared)]),
   );
   return {
     ...ctx.env,
@@ -201,7 +217,7 @@ function evaluateFile(
   }
   let content = readFileSync(srcPath);
   const mode = statSync(srcPath).mode & 0o777;
-  if (!content.includes(0) && content.includes(`\${CCC_SECRET_`)) {
+  if (!content.includes(0) && /\$\{CCC_(SECRET|INPUT)_/.test(content.toString("utf8"))) {
     content = Buffer.from(substitute(content.toString("utf8"), secrets));
   }
   if (!stat) {
@@ -329,7 +345,11 @@ function evaluateJsonMerge(
   };
 }
 
-function evaluateCommand(step: Extract<Step, { type: "command" }>, ctx: EvalContext): Evaluation {
+function evaluateCommand(
+  step: Extract<Step, { type: "command" }>,
+  mod: CatalogModule,
+  ctx: EvalContext,
+): Evaluation {
   const { env, secrets, platform, claudeDir } = ctx;
   const summary = step.shell ?? (step.run ?? []).join(" ");
   if (step.os && !step.os.includes(platform as never)) {
@@ -349,7 +369,7 @@ function evaluateCommand(step: Extract<Step, { type: "command" }>, ctx: EvalCont
   if (step.requiresBin && !which(step.requiresBin, env)) {
     return { action: "skip", reason: `"${step.requiresBin}" not found on PATH`, summary };
   }
-  const runEnv = commandEnv(step, ctx);
+  const runEnv = commandEnv(step, mod, ctx);
   const argv =
     step.shell !== undefined
       ? bashArgv(substitute(step.shell, secrets))
@@ -373,7 +393,7 @@ function evaluate(step: Step, mod: CatalogModule, ctx: EvalContext): Evaluation 
       case "json-merge":
         return evaluateJsonMerge(step, mod, ctx);
       case "command":
-        return evaluateCommand(step, ctx);
+        return evaluateCommand(step, mod, ctx);
     }
   } catch (error) {
     // One unreadable file or missing secret must not abort the whole plan: the step is blocked.
@@ -381,7 +401,7 @@ function evaluate(step: Step, mod: CatalogModule, ctx: EvalContext): Evaluation 
       return {
         action: "skip",
         reason: error.message,
-        summary: `needs secret ${error.secret}`,
+        summary: `needs ${error.kind} ${error.secret}`,
         blocked: true,
         needsSecret: error.secret,
       };
@@ -406,6 +426,7 @@ function planModule(
     description: mod.description,
     dir: mod.dir,
     requires: mod.requires ?? [],
+    values: [...declaredNames(mod)],
     steps: mod.steps.map((step, index) => {
       const evaluation = evaluate(step, mod, ctx);
       for (const conflict of evaluation.conflicts ?? []) {
@@ -475,16 +496,22 @@ export function plan(options: PlanOptions): Plan {
   return result;
 }
 
-/** Secrets declared by the selected modules (and their requires), deduplicated by name. */
+/**
+ * Secrets and inputs declared by the selected modules (and their requires), deduplicated by
+ * name; `secret` is false for non-secret inputs.
+ */
 export function requiredSecrets(
   catalog: Catalog,
   selection: Selection,
-): (SecretSpec & { module: string })[] {
+): (SecretSpec & { module: string; secret: boolean })[] {
   const seen = new Set<string>();
   return resolveSelection(catalog, selection).flatMap((mod) =>
-    (mod.secrets ?? [])
-      .filter((secret) => !seen.has(secret.name) && seen.add(secret.name))
-      .map((secret) => ({ ...secret, module: mod.id })),
+    [
+      ...(mod.secrets ?? []).map((value) => ({ ...value, secret: true })),
+      ...(mod.inputs ?? []).map((value) => ({ ...value, secret: false })),
+    ]
+      .filter((value) => !seen.has(value.name) && seen.add(value.name))
+      .map(({ name, description, secret }) => ({ name, description, module: mod.id, secret })),
   );
 }
 
@@ -542,7 +569,11 @@ export function startApply(planToApply: Plan, options: ApplyOptions = {}): Apply
       dest: planned.dest,
       command: planned.command,
     };
-    const catalogModule: CatalogModule = { ...mod, steps: [] };
+    const catalogModule: CatalogModule = {
+      ...mod,
+      steps: [],
+      inputs: mod.values.map((name) => ({ name, description: name })),
+    };
     const evaluation = evaluate(planned.step, catalogModule, ctx);
     const result = (status: StepResult["status"], message: string): StepResult => ({
       ...base,
@@ -553,7 +584,10 @@ export function startApply(planToApply: Plan, options: ApplyOptions = {}): Apply
     if (evaluation.action === "skip") {
       // A dry run does not need secret values: the step is planned and marked.
       if (dryRun && evaluation.needsSecret) {
-        return result("planned", `needs secret ${evaluation.needsSecret}`);
+        return result(
+          "planned",
+          `needs ${isSecretName(evaluation.needsSecret) ? "secret" : "input"} ${evaluation.needsSecret}`,
+        );
       }
       return result(evaluation.blocked ? "failed" : "skipped", evaluation.reason);
     }
@@ -675,9 +709,7 @@ export function status(options: StatusOptions): StatusReport {
     platform: platformOf(env, options.platform),
   };
   const modules: ModuleStatus[] = options.catalog.modules.map((mod) => {
-    const missingSecrets = (mod.secrets ?? [])
-      .map((secret) => secret.name)
-      .filter((name) => secrets[name] === undefined);
+    const missingSecrets = [...declaredNames(mod)].filter((name) => secrets[name] === undefined);
     const evaluations = mod.steps.map((step) => evaluate(step, mod, ctx));
     const count = (pred: (e: Evaluation) => boolean) => evaluations.filter(pred).length;
     const satisfied = count((e) => e.action === "unchanged");

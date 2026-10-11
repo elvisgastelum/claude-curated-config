@@ -481,6 +481,53 @@ describe("ccc --cli", () => {
     expect(readFileSync(join(out, "profiles/personal.json"), "utf8")).toBe("{ broken");
   });
 
+  it("reads module inputs from the env and exits 2 inputs_missing without them", () => {
+    const catalog = temp();
+    const log = join(temp(), "log");
+    mkdirSync(join(catalog, "modules/svc"), { recursive: true });
+    mkdirSync(join(catalog, "profiles"));
+    writeFileSync(
+      join(catalog, "modules/svc/module.json"),
+      JSON.stringify({
+        id: "svc",
+        name: "Service",
+        description: "Registers a service by URL.",
+        inputs: [{ name: "SVC_URL", description: "Base URL of your service" }],
+        steps: [
+          {
+            type: "command",
+            shell: `echo "$SVC_URL" >> '${log}'`,
+            env: { SVC_URL: `\${SVC_URL}` },
+          },
+        ],
+      }),
+    );
+    const args = ["--cli", "--catalog", catalog, "--claude-dir", join(temp(), "c"), "--json"];
+
+    const plan = ccc([...args, "plan", "-m", "svc"]).json();
+    expect(plan.secrets).toEqual([
+      {
+        name: "SVC_URL",
+        description: "Base URL of your service",
+        module: "svc",
+        secret: false,
+        provided: false,
+      },
+    ]);
+    const missing = ccc([...args, "apply", "-m", "svc", "--yes"]);
+    expect(missing.code).toBe(2);
+    const error = missing.json().error as { code: string; inputs: { name: string }[] };
+    expect(error.code).toBe("inputs_missing");
+    expect(error.inputs.map((i) => i.name)).toEqual(["SVC_URL"]);
+    expect(existsSync(log)).toBe(false);
+
+    const ok = ccc([...args, "apply", "-m", "svc", "--yes"], {
+      SVC_URL: "https://svc.example.test",
+    });
+    expect(ok.code).toBe(0);
+    expect(readFileSync(log, "utf8")).toBe("https://svc.example.test\n");
+  });
+
   it("rejects an unknown capture kind with exit 2", () => {
     const run = ccc(["--cli", "capture", "--include", "nope", "--dry-run", "--json"]);
     expect(run.code).toBe(2);

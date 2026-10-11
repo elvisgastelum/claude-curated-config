@@ -54,6 +54,7 @@ export type { Redaction, SecretSpec } from "./secrets";
 export {
   findSecrets,
   isSecretKey,
+  isSecretName,
   MissingSecretError,
   maskJson,
   maskValues,

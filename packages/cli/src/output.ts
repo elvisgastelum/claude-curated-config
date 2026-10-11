@@ -92,6 +92,8 @@ export interface SecretState {
   name: string;
   description: string;
   module: string;
+  /** False for a non-secret module input. */
+  secret: boolean;
   provided: boolean;
 }
 

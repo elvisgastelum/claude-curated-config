@@ -20,10 +20,15 @@ export function isSecretKey(key: string): boolean {
   return SECRET_KEY.test(key) || KEY_SUFFIX.test(key) || CAMEL_KEY_SUFFIX.test(key);
 }
 
-/** `${CCC_SECRET_NAME}`: a placeholder filled at plan/apply time from a secret value. */
-export const PLACEHOLDER = /\$\{(CCC_SECRET_[A-Z0-9_]+)\}/g;
+/**
+ * `${CCC_SECRET_NAME}` / `${CCC_INPUT_NAME}`: a placeholder filled at plan/apply time from a
+ * secret or a (non-secret) input value.
+ */
+export const PLACEHOLDER = /\$\{(CCC_(?:SECRET|INPUT)_[A-Z0-9_]+)\}/g;
 export const SECRET_NAME = /^CCC_SECRET_[A-Z0-9_]+$/;
-const HAS_PLACEHOLDER = /\$\{CCC_SECRET_[A-Z0-9_]+\}/;
+/** Module input names: upper-case env var names that are not secrets. */
+export const INPUT_NAME = /^(?!CCC_SECRET_)[A-Z][A-Z0-9_]*$/;
+const HAS_PLACEHOLDER = /\$\{CCC_(?:SECRET|INPUT)_[A-Z0-9_]+\}/;
 
 /** A credential shape; with `group`, only that capture group is the secret. */
 interface Shape {
@@ -249,14 +254,25 @@ export class Redactor {
 }
 
 /** A `${CCC_SECRET_*}` placeholder has no value. */
+/** Whether a value name is a secret (`CCC_SECRET_*`) rather than a non-secret input. */
+export function isSecretName(name: string): boolean {
+  return SECRET_NAME.test(name);
+}
+
+/** A secret or input value a step needs was not provided. */
 export class MissingSecretError extends Error {
+  /** "secret" for `CCC_SECRET_*` names, else "input". */
+  readonly kind: "secret" | "input";
+
   constructor(readonly secret: string) {
-    super(`missing secret ${secret} (set it to apply this step)`);
+    const kind = isSecretName(secret) ? "secret" : "input";
+    super(`missing ${kind} ${secret} (set it to apply this step)`);
     this.name = "MissingSecretError";
+    this.kind = kind;
   }
 }
 
-/** Replaces `${CCC_SECRET_*}` placeholders; throws {@link MissingSecretError} for the first missing value. */
+/** Replaces `${CCC_SECRET_*}` and `${CCC_INPUT_*}` placeholders; throws {@link MissingSecretError} for the first missing value. */
 export function substitute(text: string, values: Record<string, string>): string {
   return text.replace(PLACEHOLDER, (_whole, name: string) => {
     const value = values[name];

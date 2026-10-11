@@ -108,6 +108,19 @@ A module that needs a secret declares it and uses a `${CCC_SECRET_<NAME>}` place
 
 `ccc` fills placeholders at apply time (TUI prompt, or the environment variable of the same name in `--cli` mode). `ccc capture` generates these automatically. Symlinked files are not substituted.
 
+### Inputs
+
+A non-secret value that differs per person or machine (a self-hosted URL, a host name) is an input, so it never lives in the catalog:
+
+```json
+{
+  "inputs": [{ "name": "KANEO_URL", "description": "Base URL of your Kaneo instance" }],
+  "steps": [{ "type": "command", "shell": "...", "env": { "KANEO_URL": "${KANEO_URL}" } }]
+}
+```
+
+Command `env` values reference an input as `${NAME}`; inputs named `CCC_INPUT_*` (what `ccc capture` generates) are also substituted in json-merge sources, copied text files and command args, like secrets. The TUI asks for missing inputs as plain text; `--cli` reads the environment variable of the same name and exits `2` (`inputs_missing`) when one is missing. Names must be upper case, not `CCC_SECRET_*`, and not one ccc sets (`HOME`, `PATH`, `CCC_CLAUDE_DIR`, ...).
+
 ## Add a profile
 
 Create `profiles/<id>.json`:

@@ -81,6 +81,17 @@ export interface ProvidedSettingItems {
   match?: string[];
 }
 
+/**
+ * A non-secret value a module needs at apply time (a URL, a host name). Asked in the TUI
+ * (plain text) or read from the environment variable of the same name in `--cli` mode.
+ * Command `env` values reference it as `${NAME}`; names starting with `CCC_INPUT_` are also
+ * substituted in json-merge sources, text files and command args, like secrets.
+ */
+export interface ModuleInput {
+  name: string;
+  description: string;
+}
+
 export interface ModuleProvides {
   /** Globs relative to the Claude dir (`*`, `**`, `?`); a match also covers everything below it. */
   paths?: string[];
@@ -102,6 +113,8 @@ export interface Module {
   requires?: string[];
   /** Secrets substituted into json-merge sources, text files and command args. */
   secrets?: ModuleSecret[];
+  /** Non-secret values (see {@link ModuleInput}). */
+  inputs?: ModuleInput[];
   provides?: ModuleProvides;
   steps: Step[];
 }
@@ -159,6 +172,8 @@ export interface PlannedModule {
   dir: string;
   /** Ids of the modules this one requires (they come earlier in the plan). */
   requires: string[];
+  /** Names of the secrets and inputs the module declares (values come from the plan). */
+  values: string[];
   steps: PlannedStep[];
 }
 

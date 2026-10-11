@@ -320,7 +320,10 @@ async function askOutDir(ctx: Context): Promise<string | null> {
   return resolve(answer.trim().replace(/^~(?=\/|$)/, homedir()));
 }
 
-/** Secrets the selection declares, with values taken from same-named environment variables. */
+/**
+ * Secrets and inputs the selection declares (`secret` false for inputs), with values taken
+ * from same-named environment variables.
+ */
 export function secretStatus(catalog: Catalog, selection: Selection) {
   const values: Record<string, string> = {};
   const required = requiredSecrets(catalog, selection).map((secret) => {
@@ -332,9 +335,10 @@ export function secretStatus(catalog: Catalog, selection: Selection) {
 }
 
 /**
- * Collects the secret values a selection needs from the environment. In interactive mode,
- * missing ones are asked with a masked prompt; otherwise exit 2 (`secrets_missing`).
- * Returns null when the user cancels a prompt.
+ * Collects the secret and input values a selection needs from the environment. In
+ * interactive mode, missing ones are asked (secrets masked, inputs as plain text); otherwise
+ * exit 2: `secrets_missing` when a secret is missing, else `inputs_missing`. Returns null
+ * when the user cancels a prompt.
  */
 export async function collectSecrets(
   ctx: Context,
@@ -346,14 +350,23 @@ export async function collectSecrets(
   const missing = required.filter((secret) => !secret.provided);
   if (missing.length === 0) return values;
   if (!options.prompt) {
+    const brief = ({ name, description, module }: (typeof missing)[number]) => ({
+      name,
+      description,
+      module,
+    });
+    const secrets = missing.filter((value) => value.secret).map(brief);
+    const inputs = missing.filter((value) => !value.secret).map(brief);
+    const what = secrets.length > 0 ? "secret(s)" : "input(s)";
     throw new UsageError(
-      "secrets_missing",
-      `missing secret(s); set these environment variables and re-run (nothing was written): ${missing.map((s) => s.name).join(", ")}`,
-      { secrets: missing.map(({ name, description, module }) => ({ name, description, module })) },
+      secrets.length > 0 ? "secrets_missing" : "inputs_missing",
+      `missing ${what}; set these environment variables and re-run (nothing was written): ${missing.map((s) => s.name).join(", ")}`,
+      { secrets, inputs },
     );
   }
   for (const secret of missing) {
-    const value = await password({
+    const ask = secret.secret ? password : text;
+    const value = await ask({
       message: `${secret.name} (${secret.description})`,
       validate: (input) => (input ? undefined : "required"),
     });

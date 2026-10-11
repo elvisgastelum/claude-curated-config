@@ -19,6 +19,7 @@ export interface FixtureModule {
   id: string;
   requires?: string[];
   secrets?: { name: string; description: string }[];
+  inputs?: { name: string; description: string }[];
   provides?: Record<string, string[]>;
   steps: unknown[];
   files?: Record<string, string>;
@@ -41,6 +42,7 @@ export function writeCatalog(
         description: `Fixture module ${mod.id}`,
         requires: mod.requires,
         secrets: mod.secrets,
+        inputs: mod.inputs,
         provides: mod.provides,
         steps: mod.steps,
       }),
