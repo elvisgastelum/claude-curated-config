@@ -98,6 +98,32 @@ describe("privacy redaction", () => {
       ".claude.json /mcpServers/svc/again",
     ]);
   });
+
+  it("flags a whole structured value that is a bare .local host, not .local names in prose", () => {
+    const redactor = new Redactor("personal-x", "MCP_NAS", new Set(), { privateDomains: [] });
+    const out = redactor.redactJson(
+      {
+        env: { NAS_HOST: "nas.local", PRINTER: "printer.local:631", NOTE: "edit foo.local" },
+        headers: { "X-Host": "box.lan.local" },
+        args: ["--host", "pi.local", "--config", "settings.local.json", ".env.local"],
+      },
+      ".claude.json",
+      "/mcpServers/nas",
+    ) as { env: Record<string, string>; headers: Record<string, string>; args: string[] };
+    expect(JSON.stringify(out)).not.toMatch(/nas\.local|printer\.local|box\.lan\.local|pi\.local/);
+    expect(out.env.NAS_HOST).toMatch(/^\$\{CCC_INPUT_MCP_NAS_[A-Z0-9_]+\}$/);
+    expect(out.env.PRINTER).toMatch(/^\$\{CCC_INPUT_MCP_NAS_[A-Z0-9_]+\}:631$/);
+    expect(out.env.NOTE).toBe("edit foo.local");
+    expect(out.args.slice(2)).toEqual(["--config", "settings.local.json", ".env.local"]);
+    expect(redactor.privacy.map((p) => p.location)).toEqual([
+      ".claude.json /mcpServers/nas/env/NAS_HOST",
+      ".claude.json /mcpServers/nas/env/PRINTER",
+      ".claude.json /mcpServers/nas/headers/X-Host",
+      ".claude.json /mcpServers/nas/args/1",
+    ]);
+    // Prose stays host-context-only.
+    expect(redactor.redactDocument("nas.local\n", "notes.md")).toBe("nas.local\n");
+  });
 });
 
 describe("capture privacy scan", () => {

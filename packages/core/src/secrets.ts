@@ -138,12 +138,28 @@ function escapeDomain(domain: string): string {
   return domain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** A whole value that is a bare mDNS host (`nas.local`, `printer.local:631`). */
+const BARE_LOCAL_HOST = new RegExp(`^(?:${LABEL}\\.)+local(?=$|:\\d+$)`, "i");
+
+export interface FindPrivateOptions {
+  /**
+   * The text is one structured value (a JSON string, env value, header, argv item): a whole
+   * value that is a bare `*.local` host is flagged too. Prose keeps the host-context rule.
+   */
+  structured?: boolean;
+}
+
 /**
  * Finds private infrastructure details: host names under `domains` (and the domains
  * themselves), `*.ts.net` (Tailscale) hosts, `*.local` (mDNS) hosts in a URL/host context
- * (`scheme://`, `user@`, `:port`), and private IPv4 addresses (10/8, 172.16/12, 192.168/16, 100.64/10 CGNAT/Tailscale).
+ * (`scheme://`, `user@`, `:port`, or a whole structured value), and private IPv4 addresses
+ * (10/8, 172.16/12, 192.168/16, 100.64/10 CGNAT/Tailscale).
  */
-export function findPrivate(text: string, domains: readonly string[]): Span[] {
+export function findPrivate(
+  text: string,
+  domains: readonly string[],
+  options: FindPrivateOptions = {},
+): Span[] {
   const hostSuffixes = [
     ...domains.map((domain) => `(?:${LABEL}\\.)*${escapeDomain(domain)}`),
     `(?:${LABEL}\\.)+ts\\.net`,
@@ -157,6 +173,8 @@ export function findPrivate(text: string, domains: readonly string[]): Span[] {
     if (!spans.some((s) => start < s.end && end > s.start)) spans.push({ start, end });
   };
   for (const match of text.matchAll(hosts)) add(match.index, match.index + match[0].length);
+  const bare = options.structured ? BARE_LOCAL_HOST.exec(text) : null;
+  if (bare) add(0, bare[0].length);
   for (const match of text.matchAll(PRIVATE_IPV4)) {
     if (match[0].split(".").every((octet) => Number(octet) <= 255)) {
       add(match.index, match.index + match[0].length);
@@ -266,9 +284,14 @@ export class Redactor {
   }
 
   /** Redacts credential-shaped substrings, then private infrastructure details, of a string. */
-  redactText(text: string, hint: string, location: (offset: number) => string): string {
+  redactText(
+    text: string,
+    hint: string,
+    location: (offset: number) => string,
+    options: FindPrivateOptions = {},
+  ): string {
     const secrets = findSecrets(text).map((span) => ({ ...span, kind: "secret" as const }));
-    const privateSpans = findPrivate(text, this.privateDomains)
+    const privateSpans = findPrivate(text, this.privateDomains, options)
       .filter((span) => !secrets.some((s) => span.start < s.end && span.end > s.start))
       .map((span) => ({ ...span, kind: "input" as const }));
     const spans = [...secrets, ...privateSpans].sort((a, b) => a.start - b.start);
@@ -322,7 +345,7 @@ export class Redactor {
         }
         return this.placeholder(value, key, where(path));
       }
-      return this.redactText(value, key || "TOKEN", () => where(path));
+      return this.redactText(value, key || "TOKEN", () => where(path), { structured: true });
     }
     if (Array.isArray(value)) {
       let flag = "";
