@@ -482,6 +482,7 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
     }
     withoutIgnoredItems(doc, options.ignoreSettingsItems ?? CAPTURE_IGNORE_SETTINGS_ITEMS, report);
     withoutMachineLocal(doc, machineLocalTest(options.home ?? homedir()), report);
+    withoutEmptyHooks(doc);
     add(
       "settings",
       "personal-settings",
@@ -825,6 +826,25 @@ function withoutMachineLocal(
     if (cleaned === DROP) delete doc[key];
     else doc[key] = cleaned;
   }
+}
+
+/**
+ * Prunes hook entries left without commands after capture dropped some: matcher groups
+ * whose `hooks` list is missing or empty, then event lists left empty, then an empty
+ * `hooks` object. A `{ "matcher": "Bash" }` without hooks is never kept.
+ */
+function withoutEmptyHooks(doc: Record<string, Json>): void {
+  const hooks = doc.hooks;
+  if (!isPlainObject(hooks)) return;
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!Array.isArray(groups)) continue;
+    const kept = groups.filter(
+      (group) => !isPlainObject(group) || (Array.isArray(group.hooks) && group.hooks.length > 0),
+    );
+    if (kept.length > 0) hooks[event] = kept;
+    else delete hooks[event];
+  }
+  if (Object.keys(hooks).length === 0) delete doc.hooks;
 }
 
 function statSafe(path: string) {

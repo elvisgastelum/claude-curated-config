@@ -627,4 +627,41 @@ describe("settings left out of a capture", () => {
     );
     expect(JSON.stringify(settings)).not.toMatch(/someone\/Projects|\/home\/|\/opt\/me/);
   });
+
+  it("prunes hook matchers, events and the hooks object left without commands", () => {
+    const { result, settings } = capture({
+      model: "opus",
+      hooks: {
+        PreToolUse: [
+          { matcher: "Bash", hooks: [{ type: "command", command: "/Users/someone/a.sh" }] },
+          { matcher: "Edit", hooks: [{ type: "command", command: "echo edit" }] },
+        ],
+        Stop: [{ matcher: "", hooks: [{ type: "command", command: "/home/someone/stop.sh" }] }],
+      },
+    });
+    expect(settings).toEqual({
+      model: "opus",
+      hooks: {
+        PreToolUse: [{ matcher: "Edit", hooks: [{ type: "command", command: "echo edit" }] }],
+      },
+    });
+    expect(result.skipped.map((s) => s.path)).toEqual(
+      expect.arrayContaining([
+        "settings.json /hooks/PreToolUse/0/hooks/0/command",
+        "settings.json /hooks/Stop/0/hooks/0/command",
+      ]),
+    );
+  });
+
+  it("removes the hooks object when every matcher loses its commands", () => {
+    const { settings } = capture({
+      model: "opus",
+      hooks: {
+        PreToolUse: [
+          { matcher: "Bash", hooks: [{ type: "command", command: "/Users/someone/a.sh" }] },
+        ],
+      },
+    });
+    expect(settings).toEqual({ model: "opus" });
+  });
 });
