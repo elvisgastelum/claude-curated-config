@@ -43,7 +43,7 @@ Strategy: `single-pr` (user decision 2026-10-11). Create public repo elvisgastel
 | T7 | Explicit profile order (`order` field; minimal first) | delegated | [x] | f0a63fe |
 | T8 | json-merge conflict detection: TUI asks per conflict; `--cli` fails exit 2 listing conflicts unless `--on-conflict catalog\|keep` or `--resolve <module>:<json.path>=catalog\|keep` | delegated | [x] | e8a257a |
 | T9 | `ccc capture`: import current ~/.claude into catalog modules + `personal` profile; secrets redacted to `${VAR}` placeholders filled at apply (TUI prompt / env in agent mode) | delegated | [x] | 5de5a65 |
-| T10 | Review 2 fixes on PR #1: broader secret detection (`*_KEY`, `DATABASE_URL`, hex, URL credentials, MCP argv), status honors secrets/keep, bounded+tolerant capture walk, Node >= 20.12 floor, capture requires `--out` when running from the installer checkout, small R2 cleanups | delegated | [ ] | |
+| T10 | Review 2 fixes on PR #1: broader secret detection (`*_KEY`, `DATABASE_URL`, hex, URL credentials, MCP argv), status honors secrets/keep, bounded+tolerant capture walk, Node >= 20.12 floor, capture requires `--out` when running from the installer checkout, small R2 cleanups | delegated | [x] | 9e0b420 |
 
 Route evidence: empty repo, 5 tasks across many non-trivial files → one bounded writer (mandatory writer trigger).
 
@@ -85,6 +85,18 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
   - R4/R3: `status` ignores provided secrets and `keep` resolutions (misreports modules); capture walk follows symlinks unbounded and is not error-tolerant; `Dirent.parentPath` needs Node >= 20.12 (raise `engines.node` or avoid it).
   - R2: personal profile action misreported on empty capture; duplicated apply flow / truncate helpers; dry-run requires secrets.
 - Pre-push history scan: no real credentials (only regex sources, docs and fake fixtures).
+
+## T10 evidence (review 2 fixes, commit 9e0b420)
+- RED observed: 20 failing (new `secrets.test.ts`; capture walk/caps/unreadable/symlink/MCP prefix/empty profile; dry-run secrets; status needs-secrets + conflicts; doctor semver; CLI out_required, status flags, dry-run apply), then GREEN 81/81.
+- Secrets: `isSecretKey` (broad fragments incl. `auth` but not `author`, `database_url`, `connection_string`; `*_KEY`/`-key`/`key` suffix; camelCase `Key`) for JSON, env, headers, argv flags and non-markdown text; markdown/text files only redact unambiguous names (`password`, `token`, `secret`, `api_key`, ...), so `author:`/`session_notes:` frontmatter stays. New value shapes: hex >= 32 (git SHAs included, by design), `npm_`, `glpat-`, `AIza`, `hf_`, `Bearer <token>` (token only), `scheme://user:PASS@` (password only), `?token=/key=/password=` URL params (value only). MCP placeholder prefix is now `mcp_<slug>` (`CCC_SECRET_MCP_<SERVER>_...`).
+- `status()` takes `secrets`, `resolutions`, `onConflict`; new states `needs-secrets` (declared secrets without values) and `conflicts` (only undecided json-merge conflicts differ); `ModuleStatus` gains `conflicts` and `missingSecrets`. CLI `status` accepts `--on-conflict`/`--resolve` and reads `CCC_SECRET_*` env; TUI badges use it. No decision persistence.
+- Capture walk: `MAX_WALK_DEPTH` 8; symlinked dirs inside an item are not followed (item roots such as a symlinked skill dir are followed once); caps 500 files / 5 MB per item (item skipped whole); ignores `.venv venv dist build target .next .cache coverage`; per-entry fs errors become `skipped: [{ path, reason }]` (new field in `CaptureResult` and `ccc.capture/v1`). `walkAll` no longer uses `Dirent.parentPath`.
+- Node floor `>=20.12.0` (root + cli); `doctor` uses `MIN_NODE_VERSION` + `compareVersions` (full semver); install.sh compares full semver via node.
+- `ccc capture` without `--out` exits 2 `out_required` when the catalog is not in a git checkout or is the installer checkout (`$CCC_HOME` or `~/.local/share/claude-curated-config`, realpath compared); the installer wrapper now exports `CCC_HOME`. TUI prompts for the out dir (default: `<clone>/packages/catalog` of the cwd claude-curated-config clone, else the catalog in use when allowed).
+- R2: empty capture reports profile `unchanged`; `preparePlan()` shared by `ccc apply` and the TUI; `truncate()` shared by plan render and conflict preview; `apply --dry-run` needs no secret values (steps `planned`, message `needs secret <NAME>`; `PlannedStep.needsSecret`).
+- Verification: pnpm install 0, pnpm build 0, pnpm typecheck 0, pnpm lint 0 (50 files), pnpm test 0 (81/81), bash -n install.sh 0. Manual (temp HOME, no real claude): capture of a fixture with `OPENAI_KEY`, `DATABASE_URL=postgres://u:p@h/db`, a 40-char hex, an MCP `--api-key` argv secret and a markdown `author: Someone Name Here Long` -> 0 matches for each fake secret in the output dir and JSON, author line intact, 5 placeholders; `CCC_HOME=<temp checkout>` capture without `--out` -> exit 2 `out_required`.
+- Not done: TTY smoke of the new TUI out-dir prompt (typecheck only); shellcheck unavailable.
+- Deviation: markdown keeps strict-name redaction (`password:` lines) instead of value-shape-only, so secret coverage in prose does not regress.
 
 ## Next step
 PR #1 open (https://github.com/elvisgastelum/claude-curated-config/pull/1). User decisions 2026-10-11: fix review 2 gaps on PR #1 (T10); do NOT remember keep decisions between runs; installed `ccc capture` requires `--out`; then run `ccc capture --dry-run` on the real ~/.claude and show items + redactions before writing anything.
