@@ -48,6 +48,7 @@ Strategy: `single-pr` (user decision 2026-10-11). Create public repo elvisgastel
 | T12 | Catalog: installer modules (claude-commit-skill, kaneo-work-tracking-skill, claude-continue-skill, claude-statusline, configure-env, herdr + herdr-config) and tool modules (gentle-ai, engram, codegraph: install if missing on macOS+Linux, then each tool's Claude setup); `personal` profile skeleton; doctor prerequisites (curl, jq, bash, brew/npm) | delegated | [x] | 331237d |
 | T14 | User decisions + review 4 fixes: statusline via installer; gentle-ai-claude owns engram/codegraph MCP + hooks (engram/codegraph setup only when gentle-ai did not); core-settings in personal; pin configure-env; array-item provides; pin remote installers to commit SHAs; jq-based MCP checks on user-scope mcpServers; herdr check without SIGPIPE; capture: warn on provides load errors, never overwrite an unparseable personal profile, report skipped statusline script, fix profile action + marker docs; plus (A) KANEO_URL as a required non-secret module input, (B) capture privacy scan to `${CCC_INPUT_*}` inputs | delegated | [x] | a2ca769, 1d975a5, f389905, 0c4ea12, f93427f |
 | T15 | User decisions + review 5 fixes: inputs/secrets only for steps that will run (check first; R3-001), drop `skill-configure-env` from `personal` until published, capture drops homelab settings items (`CAPTURE_IGNORE_SETTINGS_ITEMS`, reason `homelab`), skip real-jq tests without jq (R3-002), `.local` hosts only in a host context (R3-003) | delegated | [x] | 63dd012, adc5ee7, 590a510, 90483f4, ce80994 |
+| T16 | Capture config file (`packages/catalog/capture.config.json`: ignoreSettings pointers, ignoreSettingsItems, privateDomains); drop settings strings with machine-local absolute paths (reported as skipped); ignore `/skipDangerousModePermissionPrompt`; review 6 fixes: collect inputs/secrets for steps skipped only because their bin is not installed yet, flag bare `*.local` hosts in structured JSON values | delegated | [ ] | |
 | T13 | Re-run real capture dry-run, show the user, write leftover personal modules (settings + personal CLAUDE.md sections) only after approval | parent | [ ] | |
 
 Route evidence: empty repo, 5 tasks across many non-trivial files → one bounded writer (mandatory writer trigger).
@@ -166,5 +167,10 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 - (Settled: unpushed history rewritten to kaneo.example.com before push.) The homelab Kaneo URL remained in the git history of earlier commits on this branch.
 - (Settled in T15: capture drops it, reason `homelab`.) `Bash(homelabctl:*)` in the real settings is a homelab hint the privacy scan does not flag.
 
+## Review 6 (T15) and T13 dry-run (2026-10-11)
+- T15 review (reliability lens) approved, acknowledged (lineage review-c34268c74c8b22d2). Branch pushed to PR #1 (e1efd38); history scrub check = 0.
+- Real capture dry-run: only `personal-claude-md` (Standing review consent section) and `personal-settings` remain; 105 entries skipped as provided/ignored; 0 redactions, 0 privacy hits.
+- User decisions: write + commit T13; autoMode: trust the remote repo, keep machine-local path entries out of the portable catalog; leave out `skipDangerousModePermissionPrompt`; fix both review 6 warnings (T16).
+
 ## Next step
-Parent runs T13 (real capture dry-run with `CCC_PRIVATE_DOMAINS` → ask → write) and settles the T14 open questions.
+Writer implements T16. Then parent runs the real capture (T13), commits, gets it reviewed and pushes to PR #1.
