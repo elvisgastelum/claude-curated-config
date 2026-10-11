@@ -28,16 +28,30 @@ export interface RunResult {
   stderr: string;
 }
 
-/** Runs an argv without a shell. Never throws; spawn errors map to code 127. */
-export function runArgv(argv: string[], env: NodeJS.ProcessEnv = process.env): RunResult {
+export interface RunOptions {
+  /** Give the child the terminal (stdin/stdout/stderr inherited; output is not captured). */
+  inheritStdio?: boolean;
+  /** Kill the child after this many milliseconds (default 5 minutes). */
+  timeoutMs?: number;
+}
+
+/**
+ * Runs an argv without a shell, stdin closed (`/dev/null`) unless `inheritStdio`. Never
+ * throws; spawn errors map to code 127.
+ */
+export function runArgv(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+  options: RunOptions = {},
+): RunResult {
   const [command, ...args] = argv;
   if (!command) return { code: 127, stdout: "", stderr: "empty command" };
   const executable = which(command, env) ?? command;
   const result = spawnSync(executable, args, {
     env: { ...process.env, ...env },
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 5 * 60_000,
+    stdio: options.inheritStdio ? "inherit" : ["ignore", "pipe", "pipe"],
+    timeout: options.timeoutMs ?? 5 * 60_000,
   });
   if (result.error) return { code: 127, stdout: "", stderr: result.error.message };
   return { code: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };

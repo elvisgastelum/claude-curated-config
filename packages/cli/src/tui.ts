@@ -125,7 +125,7 @@ export async function runTui(ctx: Context, version: string): Promise<number> {
     }
 
     // Apply one module at a time so the spinner can render between modules.
-    const run = startApply(planned);
+    const run = startApply(planned, { interactive: true });
     for (const mod of planned.modules) {
       const spin = spinner();
       spin.start(`Applying ${mod.name}`);

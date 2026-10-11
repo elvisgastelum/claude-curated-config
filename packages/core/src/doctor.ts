@@ -42,12 +42,75 @@ export interface DoctorOptions {
   claudeDir: string;
   env?: NodeJS.ProcessEnv;
   nodeVersion?: string;
+  /** Platform for the package-manager check (default `$CCC_PLATFORM`, else `process.platform`). */
+  platform?: string;
+}
+
+/** Tools the installer modules use; all optional (their steps are skipped without them). */
+const INSTALLER_TOOLS: { bin: string; why: string; fix: string }[] = [
+  { bin: "bash", why: "runs installer scripts", fix: "install bash with your package manager" },
+  {
+    bin: "curl",
+    why: "downloads installer scripts",
+    fix: "install curl with your package manager",
+  },
+  {
+    bin: "jq",
+    why: "used by several installers to edit JSON",
+    fix: "install jq (https://jqlang.org/download/)",
+  },
+  {
+    bin: "npm",
+    why: "installs npm-based tools (codegraph)",
+    fix: "install Node.js with npm (https://nodejs.org)",
+  },
+  {
+    bin: "npx",
+    why: "runs npm-based installers (configure-env, MCP servers)",
+    fix: "install Node.js with npm (https://nodejs.org)",
+  },
+];
+
+function toolCheck(id: string, path: string | null, why: string, fix: string): DoctorCheck {
+  return {
+    id,
+    ok: path !== null,
+    required: false,
+    message: path ? `${id} found at ${path}` : `${id} not found on PATH (${why})`,
+    ...(path ? {} : { fix }),
+  };
+}
+
+function brewCheck(env: NodeJS.ProcessEnv, platform: string): DoctorCheck {
+  const brew = which("brew", env);
+  const install = "install Homebrew from https://brew.sh";
+  if (platform === "darwin") {
+    return toolCheck("brew", brew, "installs gentle-ai, engram and herdr on macOS", install);
+  }
+  if (platform === "linux") {
+    return {
+      id: "brew",
+      ok: brew !== null,
+      required: false,
+      message: brew
+        ? `brew found at ${brew} (Homebrew on Linux installs gentle-ai, engram and herdr)`
+        : "brew not found on PATH: on Linux the gentle-ai, engram and herdr installs are skipped; install them with your package manager or Homebrew on Linux",
+      ...(brew ? {} : { fix: `${install} (Homebrew on Linux), or install the tools manually` }),
+    };
+  }
+  return {
+    id: "brew",
+    ok: false,
+    required: false,
+    message: `tool installs support macOS and Linux only (this is ${platform})`,
+  };
 }
 
 /** Checks the machine prerequisites. `ok` is false only when a required check fails. */
 export function doctor(options: DoctorOptions): DoctorReport {
   const env = options.env ?? process.env;
   const nodeVersion = options.nodeVersion ?? process.versions.node;
+  const platform = options.platform ?? env.CCC_PLATFORM ?? process.platform;
   const nodeOk = compareVersions(nodeVersion, MIN_NODE_VERSION) >= 0;
   const claude = which("claude", env);
   const git = which("git", env);
@@ -89,6 +152,8 @@ export function doctor(options: DoctorOptions): DoctorReport {
       message: dir.message,
       ...(dir.ok ? {} : { fix: "pass a writable --claude-dir or fix the directory permissions" }),
     },
+    ...INSTALLER_TOOLS.map(({ bin, why, fix }) => toolCheck(bin, which(bin, env), why, fix)),
+    brewCheck(env, platform),
   ];
   return { ok: checks.every((check) => check.ok || !check.required), checks };
 }

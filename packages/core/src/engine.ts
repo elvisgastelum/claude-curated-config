@@ -1,7 +1,9 @@
 import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+import { withPreservedBlocks } from "./blocks";
 import { resolveSelection } from "./catalog";
-import { runArgv, which } from "./exec";
+import { type RunOptions, runArgv, which } from "./exec";
 import {
   type BackupStore,
   createBackupStore,
@@ -61,6 +63,8 @@ interface Evaluation {
   mode?: number;
   /** Command argv with secrets substituted (command steps). */
   argv?: string[];
+  /** Environment for the command (command steps). */
+  commandEnv?: NodeJS.ProcessEnv;
   /** Absolute symlink target for symlink steps. */
   linkTarget?: string;
   /** json-merge values this step would overwrite (with their resolution when decided). */
@@ -76,6 +80,63 @@ interface EvalContext {
   decide: Decide;
   /** Values for `${CCC_SECRET_*}` placeholders. */
   secrets: Record<string, string>;
+  /** `process.platform` value used for `os` filters. */
+  platform: string;
+}
+
+/** Home directory of the given environment. */
+function homeOf(env: NodeJS.ProcessEnv): string {
+  return env.HOME || homedir();
+}
+
+/** `.claude.json` that goes with a Claude dir: `~/.claude.json` for `~/.claude`, else inside it. */
+function claudeJsonFor(claudeDir: string, home: string): string {
+  return resolve(claudeDir) === join(home, ".claude")
+    ? join(home, ".claude.json")
+    : join(resolve(claudeDir), ".claude.json");
+}
+
+/** Wraps a step's `shell` script for execution (pipefail so `curl ... | bash` fails on curl errors). */
+function bashArgv(script: string): string[] {
+  return ["bash", "-o", "pipefail", "-c", script];
+}
+
+const EXPANSION = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}|\$HOME\b/g;
+
+/**
+ * Expands a command `env` value: `${CCC_SECRET_*}` (throws {@link MissingSecretError}),
+ * `${CCC_CLAUDE_DIR}`, `${CCC_CLAUDE_JSON}`, `$HOME`, `${HOME}`, a leading `~/`, and
+ * `${NAME:-default}` from the caller's environment. Anything else is left as is.
+ */
+function expandValue(value: string, ctx: EvalContext): string {
+  const home = homeOf(ctx.env);
+  const expanded = value.replace(EXPANSION, (whole, name?: string, fallback?: string) => {
+    if (!name || name === "HOME") return home;
+    if (name.startsWith("CCC_SECRET_")) return substitute(whole, ctx.secrets);
+    if (name === "CCC_CLAUDE_DIR") return ctx.claudeDir;
+    if (name === "CCC_CLAUDE_JSON") return claudeJsonFor(ctx.claudeDir, home);
+    if (fallback !== undefined) return ctx.env[name] || fallback;
+    return whole;
+  });
+  return expanded.replace(/^~(?=\/|$)/, home);
+}
+
+/** The environment a command step runs with. */
+function commandEnv(step: Extract<Step, { type: "command" }>, ctx: EvalContext): NodeJS.ProcessEnv {
+  const extra = Object.fromEntries(
+    Object.entries(step.env ?? {}).map(([key, value]) => [key, expandValue(value, ctx)]),
+  );
+  return {
+    ...ctx.env,
+    CCC_CLAUDE_DIR: ctx.claudeDir,
+    CCC_CLAUDE_JSON: claudeJsonFor(ctx.claudeDir, homeOf(ctx.env)),
+    ...extra,
+  };
+}
+
+/** The argv shown in plans for a command step (`shell` steps as `bash -c <script>`). */
+export function commandDisplay(step: Extract<Step, { type: "command" }>): string[] {
+  return step.shell !== undefined ? ["bash", "-c", step.shell] : (step.run ?? []);
 }
 
 /** Last key of a JSON pointer (unescaped), used to recognise secret-looking keys. */
@@ -166,6 +227,9 @@ function evaluateFile(
     };
   }
   const current = readFileSync(destPath);
+  if (step.preserveBlocks && !content.includes(0) && !current.includes(0)) {
+    content = Buffer.from(withPreservedBlocks(content.toString("utf8"), current.toString("utf8")));
+  }
   if (current.equals(content)) {
     return { action: "unchanged", reason: "identical content", summary: "", destPath };
   }
@@ -267,24 +331,40 @@ function evaluateJsonMerge(
   };
 }
 
-function evaluateCommand(
-  step: Extract<Step, { type: "command" }>,
-  { env, secrets }: EvalContext,
-): Evaluation {
-  const summary = step.run.join(" ");
+function evaluateCommand(step: Extract<Step, { type: "command" }>, ctx: EvalContext): Evaluation {
+  const { env, secrets, platform, claudeDir } = ctx;
+  const summary = step.shell ?? (step.run ?? []).join(" ");
+  if (step.os && !step.os.includes(platform as never)) {
+    return {
+      action: "skip",
+      reason: `runs only on ${step.os.join(", ")} (this is ${platform})`,
+      summary,
+    };
+  }
+  if (step.globalOnly && resolve(claudeDir) !== join(homeOf(env), ".claude")) {
+    return {
+      action: "skip",
+      reason: `configures ~/.claude only (target is ${claudeDir})`,
+      summary,
+    };
+  }
   if (step.requiresBin && !which(step.requiresBin, env)) {
     return { action: "skip", reason: `"${step.requiresBin}" not found on PATH`, summary };
   }
-  const argv = step.run.map((arg) => substitute(arg, secrets));
-  if (step.check) {
-    const check = runArgv(
-      step.check.map((arg) => substitute(arg, secrets)),
-      env,
-    );
+  const runEnv = commandEnv(step, ctx);
+  const argv =
+    step.shell !== undefined
+      ? bashArgv(substitute(step.shell, secrets))
+      : (step.run ?? []).map((arg) => substitute(arg, secrets));
+  const checkArgv = step.checkShell
+    ? bashArgv(substitute(step.checkShell, secrets))
+    : step.check?.map((arg) => substitute(arg, secrets));
+  if (checkArgv) {
+    const check = runArgv(checkArgv, runEnv, { timeoutMs: 60_000 });
     if (check.code === 0) return { action: "unchanged", reason: "check passed", summary };
-    return { action: "run", reason: "check failed", summary, argv };
+    return { action: "run", reason: "check failed", summary, argv, commandEnv: runEnv };
   }
-  return { action: "run", reason: "no check defined", summary, argv };
+  return { action: "run", reason: "no check defined", summary, argv, commandEnv: runEnv };
 }
 
 function evaluate(step: Step, mod: CatalogModule, ctx: EvalContext): Evaluation {
@@ -346,7 +426,7 @@ function planModule(
         summary: evaluation.summary,
         step,
       };
-      if (step.type === "command") planned.command = step.run;
+      if (step.type === "command") planned.command = commandDisplay(step);
       else planned.dest = step.dest;
       if (evaluation.blocked) planned.blocked = true;
       if (evaluation.needsSecret) planned.needsSecret = evaluation.needsSecret;
@@ -365,6 +445,12 @@ export interface PlanOptions extends Selection {
   onConflict?: ConflictPolicy;
   /** Values for the `${CCC_SECRET_*}` placeholders of the selected modules. */
   secrets?: Record<string, string>;
+  /** Platform for `os` filters (default `$CCC_PLATFORM`, else `process.platform`). */
+  platform?: string;
+}
+
+function platformOf(env: NodeJS.ProcessEnv, platform?: string): string {
+  return platform ?? env.CCC_PLATFORM ?? process.platform;
 }
 
 /** Computes what applying the selection would do, without changing anything. */
@@ -373,12 +459,19 @@ export function plan(options: PlanOptions): Plan {
   const env = options.env ?? process.env;
   const { resolutions = {}, onConflict = "ask" } = options;
   const secrets = options.secrets ?? {};
-  const ctx: EvalContext = { claudeDir, env, decide: decider(resolutions, onConflict), secrets };
+  const platform = platformOf(env, options.platform);
+  const ctx: EvalContext = {
+    claudeDir,
+    env,
+    decide: decider(resolutions, onConflict),
+    secrets,
+    platform,
+  };
   const conflicts: Conflict[] = [];
   const modules = resolveSelection(options.catalog, options).map((mod) =>
     planModule(mod, ctx, conflicts),
   );
-  const result: Plan = { claudeDir, modules, conflicts, resolutions, onConflict };
+  const result: Plan = { claudeDir, modules, conflicts, resolutions, onConflict, platform };
   // Non-enumerable so a serialized plan never carries secret values.
   Object.defineProperty(result, "secretValues", { value: secrets, enumerable: false });
   return result;
@@ -406,6 +499,8 @@ export interface ApplyOptions {
   dryRun?: boolean;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
+  /** The caller has a terminal: steps marked `interactive` may use it. */
+  interactive?: boolean;
   onModuleStart?: (mod: PlannedModule) => void;
   onModuleEnd?: (result: ModuleResult) => void;
 }
@@ -437,6 +532,7 @@ export function startApply(planToApply: Plan, options: ApplyOptions = {}): Apply
     env,
     decide: decider(planToApply.resolutions, planToApply.onConflict),
     secrets,
+    platform: platformOf(env, planToApply.platform),
   };
   const failedModules = new Set<string>();
   const results: ModuleResult[] = [];
@@ -472,8 +568,12 @@ export function startApply(planToApply: Plan, options: ApplyOptions = {}): Apply
     try {
       if (evaluation.action === "run") {
         const step = planned.step as Extract<Step, { type: "command" }>;
-        const run = runArgv(evaluation.argv ?? step.run, env);
-        if (run.code === 0) return result("done", `ran ${step.run.join(" ")}`);
+        const runOptions: RunOptions = {
+          inheritStdio: Boolean(step.interactive && options.interactive),
+          timeoutMs: 30 * 60_000,
+        };
+        const run = runArgv(evaluation.argv ?? [], evaluation.commandEnv ?? env, runOptions);
+        if (run.code === 0) return result("done", `ran ${evaluation.summary}`);
         const output = (run.stderr || run.stdout).trim().split("\n").slice(-5).join("\n");
         return result("failed", `exit ${run.code}: ${output}`);
       }
@@ -554,6 +654,8 @@ export interface StatusOptions {
   resolutions?: Resolutions;
   /** Policy for conflicts without an explicit decision (default "ask"). */
   onConflict?: ConflictPolicy;
+  /** Platform for `os` filters (as for {@link plan}). */
+  platform?: string;
 }
 
 /**
@@ -572,6 +674,7 @@ export function status(options: StatusOptions): StatusReport {
     env,
     decide: decider(options.resolutions, options.onConflict),
     secrets,
+    platform: platformOf(env, options.platform),
   };
   const modules: ModuleStatus[] = options.catalog.modules.map((mod) => {
     const missingSecrets = (mod.secrets ?? [])

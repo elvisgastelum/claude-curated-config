@@ -1,8 +1,19 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { findManagedBlocks, stripManagedBlocks } from "./blocks";
 import { writeFileAtomic } from "./fsutil";
+import { pathMatches } from "./glob";
 import { isPlainObject, type Json } from "./merge";
+import {
+  blockProvider,
+  emptyProvided,
+  hookProvider,
+  mcpProvider,
+  type ProvidedIndex,
+  pathProvider,
+  settingProvider,
+} from "./provides";
 import { type Redaction, Redactor, type SecretSpec } from "./secrets";
 import type { Step } from "./types";
 
@@ -31,6 +42,15 @@ export const DEFAULT_CAPTURE_LIMITS: CaptureLimits = { maxFiles: 500, maxBytes: 
  */
 const IGNORED_NAME =
   /^(\.git|node_modules|__pycache__|\.DS_Store|\.venv|venv|dist|build|target|\.next|\.cache|coverage)$|^history|\.log$|\.lock$/;
+
+/**
+ * Paths (relative to the Claude dir, globs allowed) never captured: Claude-managed synced
+ * skills, and skills that must not go into a public catalog.
+ */
+export const CAPTURE_IGNORE: readonly string[] = [
+  "skills/synced",
+  "skills/homelab-service-manager",
+];
 
 export interface CaptureLimits {
   maxFiles: number;
@@ -93,6 +113,30 @@ export interface CaptureOptions {
   include?: CaptureKind[];
   /** Per-item caps (default {@link DEFAULT_CAPTURE_LIMITS}). */
   limits?: CaptureLimits;
+  /**
+   * What catalog modules already provide (see `collectProvided`): those items, settings,
+   * hooks, CLAUDE.md blocks and MCP servers are left out and reported as skipped.
+   */
+  provided?: ProvidedIndex;
+  /** Paths never captured (default {@link CAPTURE_IGNORE}). */
+  ignore?: readonly string[];
+}
+
+/** Removes the value at a JSON pointer (object keys only); returns whether it existed. */
+function removePointer(doc: Json, pointer: string): boolean {
+  const keys = pointer
+    .split("/")
+    .slice(1)
+    .map((key) => key.replaceAll("~1", "/").replaceAll("~0", "~"));
+  let node: Json = doc;
+  for (const key of keys.slice(0, -1)) {
+    if (!isPlainObject(node) || !(key in node)) return false;
+    node = node[key] as Json;
+  }
+  const last = keys.at(-1);
+  if (last === undefined || !isPlainObject(node) || !(last in node)) return false;
+  delete node[last];
+  return true;
 }
 
 /** Default `.claude.json`: `~/.claude.json` for `~/.claude`, else `<claudeDir>/.claude.json`. */
@@ -143,11 +187,17 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
   const skipped: CaptureSkip[] = [];
   const limits = options.limits ?? DEFAULT_CAPTURE_LIMITS;
   const takenNames = new Set<string>();
+  const provided = options.provided ?? emptyProvided();
+  const ignore = options.ignore ?? CAPTURE_IGNORE;
+  const relOf = (abs: string) => relative(claudeDir, abs).split(sep).join("/");
   const skip = (abs: string, reason: string, dir = false) =>
-    skipped.push({
-      path: `${relative(claudeDir, abs).split(sep).join("/")}${dir ? "/" : ""}`,
-      reason,
-    });
+    skipped.push({ path: `${relOf(abs)}${dir ? "/" : ""}`, reason });
+  /** Why a path relative to the Claude dir is left out (ignored or provided), if it is. */
+  const excluded = (rel: string): string | undefined => {
+    if (ignore.some((glob) => pathMatches(rel, glob))) return "ignored (never captured)";
+    const provider = pathProvider(provided, rel);
+    return provider ? `provided by ${provider}` : undefined;
+  };
 
   /** Directory entries (sorted, ignored names removed); an unreadable dir is skipped. */
   const listDir = (dir: string, filter: (name: string) => boolean = () => true): string[] => {
@@ -288,18 +338,51 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
     };
   };
 
-  if (wanted.has("claude-md") && existsSync(join(claudeDir, "CLAUDE.md"))) {
-    add(
-      "claude-md",
-      "personal-claude-md",
-      "CLAUDE_MD",
-      {
-        name: "Personal CLAUDE.md",
-        description: "Your global CLAUDE.md instructions (captured).",
-        source: "CLAUDE.md",
-      },
-      (r) => fileModule(r, [{ abs: join(claudeDir, "CLAUDE.md"), path: "CLAUDE.md" }], ""),
-    );
+  const claudeMdPath = join(claudeDir, "CLAUDE.md");
+  if (wanted.has("claude-md") && existsSync(claudeMdPath)) {
+    let text: string | null = null;
+    try {
+      text = readFileSync(claudeMdPath, "utf8");
+    } catch (error) {
+      skip(claudeMdPath, `unreadable (${errorCode(error)})`);
+    }
+    const reason = excluded("CLAUDE.md");
+    if (reason) skip(claudeMdPath, reason);
+    else if (text !== null) {
+      const owned = findManagedBlocks(text).flatMap((block) => {
+        const provider = blockProvider(provided, block.name);
+        if (!provider) return [];
+        skipped.push({
+          path: `CLAUDE.md <!-- ${block.name} -->`,
+          reason: `provided by ${provider}`,
+        });
+        return [block.name];
+      });
+      const personal = stripManagedBlocks(text, owned).text;
+      if (personal.trim() !== "") {
+        add(
+          "claude-md",
+          "personal-claude-md",
+          "CLAUDE_MD",
+          {
+            name: "Personal CLAUDE.md",
+            description:
+              "Your global CLAUDE.md instructions (captured); sections managed by installers are kept on apply.",
+            source: "CLAUDE.md",
+          },
+          (r) => ({
+            files: [
+              {
+                path: "CLAUDE.md",
+                content: Buffer.from(r.redactDocument(personal, "CLAUDE.md")),
+                mode: 0o644,
+              },
+            ],
+            steps: [{ type: "file", src: "CLAUDE.md", dest: "CLAUDE.md", preserveBlocks: true }],
+          }),
+        );
+      }
+    }
   }
 
   let settings: Json | undefined;
@@ -312,7 +395,9 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
     }
   }
   if (wanted.has("settings") && isPlainObject(settings)) {
-    const doc = settings;
+    const doc = withoutProvided(structuredClone(settings), provided, (path, reason) =>
+      skipped.push({ path, reason }),
+    );
     add(
       "settings",
       "personal-settings",
@@ -323,6 +408,7 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
         source: "settings.json",
       },
       (r) => {
+        if (Object.keys(doc).length === 0) return null;
         const redacted = r.redactJson(doc, "settings.json");
         const content = Buffer.from(`${JSON.stringify(redacted, null, 2)}\n`);
         return {
@@ -337,7 +423,15 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
     const statusLine = settings.statusLine;
     const command = isPlainObject(statusLine) ? statusLine.command : undefined;
     const script = typeof command === "string" ? findScript(command, claudeDir) : null;
-    if (script) {
+    const scriptReason = script ? excluded(script.rel) : undefined;
+    const lineProvider = settingProvider(provided, "/statusLine");
+    if (script && scriptReason) {
+      skip(join(claudeDir, script.rel), scriptReason);
+    } else if (script && lineProvider) {
+      if (!wanted.has("settings")) {
+        skipped.push({ path: "settings.json /statusLine", reason: `provided by ${lineProvider}` });
+      }
+    } else if (script) {
       if (isAbsolute(script.token)) {
         warnings.push(
           `settings.json statusLine.command uses the absolute path ${script.token}; prefer ~/.claude/${script.rel} so it works on other machines`,
@@ -357,6 +451,13 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
     }
   }
 
+  /** False (and recorded as skipped) when a file is ignored or provided. */
+  const keep = (abs: string): boolean => {
+    const reason = excluded(relOf(abs));
+    if (reason) skip(abs, reason);
+    return !reason;
+  };
+
   const dirKinds: {
     kind: CaptureKind;
     dir: string;
@@ -374,6 +475,11 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
       list: (dir) =>
         listDir(dir, (name) => statSafe(join(dir, name))?.isDirectory() ?? false).flatMap(
           (name) => {
+            const reason = excluded(`skills/${name}`);
+            if (reason) {
+              skip(join(dir, name), reason, true);
+              return [];
+            }
             const files = walkItem(join(dir, name));
             if (!files) return [];
             return [
@@ -391,7 +497,7 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
       kind: "agent",
       dir: "agents",
       label: "agent",
-      list: (dir) => mdFiles(listDir, dir, "agents"),
+      list: (dir) => mdFiles(listDir, dir, "agents").filter((e) => keep(join(dir, e.slug))),
     },
     {
       kind: "command",
@@ -399,7 +505,7 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
       label: "command",
       list: (dir) =>
         (walkItem(dir) ?? [])
-          .filter((rel) => rel.endsWith(".md"))
+          .filter((rel) => rel.endsWith(".md") && keep(join(dir, rel)))
           .map((rel) => ({
             slug: rel.split(sep).join("-"),
             files: [{ abs: join(dir, rel), path: rel }],
@@ -411,7 +517,7 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
       kind: "output-style",
       dir: "output-styles",
       label: "output style",
-      list: (dir) => mdFiles(listDir, dir, "output-styles"),
+      list: (dir) => mdFiles(listDir, dir, "output-styles").filter((e) => keep(join(dir, e.slug))),
     },
   ];
   for (const { kind, dir, label, list } of dirKinds) {
@@ -442,6 +548,14 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
     }
     for (const [name, config] of Object.entries(isPlainObject(servers) ? servers : {})) {
       if (!isPlainObject(config)) continue;
+      const provider = mcpProvider(provided, name);
+      if (provider) {
+        skipped.push({
+          path: `.claude.json /mcpServers/${name}`,
+          reason: `provided by ${provider}`,
+        });
+        continue;
+      }
       const slug = slugify(name);
       add(
         "mcp",
@@ -479,6 +593,39 @@ export function captureClaudeConfig(options: CaptureOptions): CaptureResult {
   }
 
   return { claudeDir, claudeJson, items, redactions, skipped, warnings };
+}
+
+/**
+ * Drops the settings and hook commands that catalog modules provide (reported through
+ * `report`), and the hook groups and events left empty.
+ */
+function withoutProvided(
+  doc: Record<string, Json>,
+  provided: ProvidedIndex,
+  report: (path: string, reason: string) => void,
+): Record<string, Json> {
+  for (const { value, module } of provided.settings) {
+    if (removePointer(doc, value)) report(`settings.json ${value}`, `provided by ${module}`);
+  }
+  const hooks = doc.hooks;
+  if (!isPlainObject(hooks)) return doc;
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!Array.isArray(groups)) continue;
+    const kept = groups.flatMap((group) => {
+      if (!isPlainObject(group) || !Array.isArray(group.hooks)) return [group];
+      const entries = group.hooks.filter((entry) => {
+        const command = isPlainObject(entry) ? entry.command : undefined;
+        const provider = typeof command === "string" ? hookProvider(provided, command) : undefined;
+        if (provider) report(`settings.json /hooks/${event} ${command}`, `provided by ${provider}`);
+        return !provider;
+      });
+      return entries.length > 0 ? [{ ...group, hooks: entries }] : [];
+    });
+    if (kept.length > 0) hooks[event] = kept;
+    else delete hooks[event];
+  }
+  if (Object.keys(hooks).length === 0) delete doc.hooks;
+  return doc;
 }
 
 function statSafe(path: string) {
@@ -584,23 +731,29 @@ export function writeCapture(
         (name) => name.startsWith("personal-") && existsSync(join(modulesDir, name, "module.json")),
       )
     : [];
-  const ids = [...new Set([...previous, ...capture.items.map((item) => item.id)])].sort();
+  const personalIds = [...new Set([...previous, ...capture.items.map((item) => item.id)])].sort();
   const profilePath = join(outDir, "profiles", `${PERSONAL_PROFILE_ID}.json`);
+  const current = readSafe(profilePath);
+  const existing = parseProfile(current);
+  // Merge into an existing profile (e.g. installer modules listed by hand): keep its fields and
+  // module order, append captured modules it does not list yet.
+  const base = existing?.modules ?? [];
+  const ids = [...base, ...personalIds.filter((id) => !base.includes(id))];
   const profileText = `${JSON.stringify(
     {
+      ...(existing ?? {}),
       id: PERSONAL_PROFILE_ID,
-      name: "Personal",
-      description: "Your own setup, captured with `ccc capture`.",
-      order: PERSONAL_PROFILE_ORDER,
+      name: existing?.name ?? "Personal",
+      description: existing?.description ?? "Your own setup, captured with `ccc capture`.",
+      order: existing?.order ?? PERSONAL_PROFILE_ORDER,
       modules: ids,
     },
     null,
     2,
   )}\n`;
-  const current = readSafe(profilePath);
   let profileAction: WriteAction = !current
     ? "create"
-    : current.toString("utf8") === profileText
+    : current.toString("utf8") === profileText || (existing && ids.length === base.length)
       ? "unchanged"
       : "update";
   if (ids.length === 0) profileAction = "unchanged"; // nothing captured: no profile is written
@@ -613,6 +766,25 @@ export function writeCapture(
     modules,
     profile: { id: PERSONAL_PROFILE_ID, path: profilePath, action: profileAction, modules: ids },
   };
+}
+
+interface ProfileDoc {
+  name?: string;
+  description?: string;
+  order?: number;
+  modules: string[];
+  [key: string]: unknown;
+}
+
+function parseProfile(content: Buffer | null): ProfileDoc | null {
+  if (!content) return null;
+  try {
+    const doc = JSON.parse(content.toString("utf8"));
+    if (!isPlainObject(doc) || !Array.isArray(doc.modules)) return null;
+    return { ...doc, modules: doc.modules.filter((id): id is string => typeof id === "string") };
+  } catch {
+    return null;
+  }
 }
 
 /** Every regular file under `dir`, relative to it (no symlinks followed). */

@@ -210,6 +210,7 @@ export async function applyCommand(ctx: Context, flags: ApplyFlags): Promise<num
 
   const result = apply(planned, {
     dryRun: flags.dryRun,
+    interactive: ctx.interactive,
     onModuleStart: (mod) => {
       if (!ctx.options.json) process.stderr.write(ctx.colors.dim(`→ ${mod.id}\n`));
     },

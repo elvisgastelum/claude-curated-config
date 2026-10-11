@@ -1,3 +1,5 @@
+export type { ManagedBlock } from "./blocks";
+export { findManagedBlocks, stripManagedBlocks, withPreservedBlocks } from "./blocks";
 export type {
   CapturedFile,
   CaptureItem,
@@ -11,6 +13,7 @@ export type {
   WriteCaptureOptions,
 } from "./capture";
 export {
+  CAPTURE_IGNORE,
   CAPTURE_KINDS,
   captureClaudeConfig,
   DEFAULT_CAPTURE_LIMITS,
@@ -26,6 +29,7 @@ export type { ApplyOptions, ApplyRun, PlanOptions, StatusOptions } from "./engin
 export {
   apply,
   BACKUP_DIR_NAME,
+  commandDisplay,
   conflictKey,
   plan,
   requiredSecrets,
@@ -35,12 +39,15 @@ export {
 } from "./engine";
 export type { CatalogErrorCode } from "./errors";
 export { CatalogError } from "./errors";
+export type { RunOptions } from "./exec";
 export { runArgv, which } from "./exec";
 export type { BackupStore } from "./fsutil";
 export { createBackupStore, writeFileAtomic } from "./fsutil";
 export type { Json, MergeConflict } from "./merge";
 export { changedPaths, deepMerge, findConflicts, pointerJoin } from "./merge";
 export { resolveClaudeDir, resolveDest, resolveInside } from "./paths";
+export type { ProvidedEntry, ProvidedIndex } from "./provides";
+export { collectProvided, PROVIDES_KINDS } from "./provides";
 export type { Redaction, SecretSpec } from "./secrets";
 export {
   findSecrets,
@@ -52,3 +59,4 @@ export {
   substitute,
 } from "./secrets";
 export type * from "./types";
+export { STEP_OS } from "./types";

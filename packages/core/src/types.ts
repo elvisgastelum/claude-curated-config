@@ -8,6 +8,12 @@ export interface FileStep {
   /** Path relative to the Claude dir. */
   dest: string;
   mode?: "copy" | "symlink";
+  /**
+   * Keep managed blocks (`<!-- BEGIN name -->`...`<!-- END name -->` or `<!-- name -->`...
+   * `<!-- /name -->`) that installers added to the destination: they are appended to the
+   * copied content, so re-applying is idempotent. Copy mode only.
+   */
+  preserveBlocks?: boolean;
 }
 
 /** Deep-merges a JSON file from the module directory into a JSON file in the Claude dir. */
@@ -17,12 +23,36 @@ export interface JsonMergeStep {
   dest: string;
 }
 
-/** Runs an argv (no shell). Skipped when `check` exits 0 or `requiresBin` is missing. */
+/** Operating systems a command step can be limited to (`process.platform` values). */
+export const STEP_OS = ["darwin", "linux", "win32"] as const;
+export type StepOs = (typeof STEP_OS)[number];
+
+/**
+ * Runs an argv (`run`, no shell) or a bash script (`shell`, run as `bash -o pipefail -c`).
+ * Stdin is closed, so installers never prompt, unless `interactive` is set and the caller
+ * runs with a terminal. Skipped when `check`/`checkShell` exits 0, `requiresBin` is missing,
+ * the OS is not in `os`, or `globalOnly` is set and the target is not `~/.claude`.
+ *
+ * Every command gets `CCC_CLAUDE_DIR` (the target Claude dir) and `CCC_CLAUDE_JSON` (its
+ * `.claude.json`) in its environment. `env` values expand `${CCC_SECRET_*}`,
+ * `${CCC_CLAUDE_DIR}`, `${CCC_CLAUDE_JSON}`, `~/`, `$HOME`, `${HOME}` and
+ * `${NAME:-default}` (from the caller's environment).
+ */
 export interface CommandStep {
   type: "command";
-  run: string[];
+  /** Exactly one of `run` and `shell`. */
+  run?: string[];
+  shell?: string;
+  /** At most one of `check` (argv) and `checkShell` (bash script). */
   check?: string[];
+  checkShell?: string;
   requiresBin?: string;
+  os?: StepOs[];
+  env?: Record<string, string>;
+  /** Let the step use the terminal when the caller is interactive (TUI). */
+  interactive?: boolean;
+  /** The tool always writes to `~/.claude`: skip the step for any other target dir. */
+  globalOnly?: boolean;
 }
 
 export type Step = FileStep | JsonMergeStep | CommandStep;
@@ -34,6 +64,23 @@ export interface ModuleSecret {
   description: string;
 }
 
+/**
+ * What a module owns in the Claude config. `ccc capture` leaves these out, so captured
+ * personal modules never duplicate what an installer module sets up.
+ */
+export interface ModuleProvides {
+  /** Globs relative to the Claude dir (`*`, `**`, `?`); a match also covers everything below it. */
+  paths?: string[];
+  /** JSON pointers in settings.json. */
+  settings?: string[];
+  /** Substrings of settings.json hook commands. */
+  hooks?: string[];
+  /** Managed CLAUDE.md block names (globs allowed, e.g. `gentle-ai:*`). */
+  claudeMdBlocks?: string[];
+  /** User-scope MCP server names in `.claude.json`. */
+  mcpServers?: string[];
+}
+
 export interface Module {
   id: string;
   name: string;
@@ -42,6 +89,7 @@ export interface Module {
   requires?: string[];
   /** Secrets substituted into json-merge sources, text files and command args. */
   secrets?: ModuleSecret[];
+  provides?: ModuleProvides;
   steps: Step[];
 }
 
@@ -134,6 +182,8 @@ export interface Plan {
   onConflict?: ConflictPolicy;
   /** Secret values used to plan (non-enumerable: never serialized). */
   readonly secretValues?: Record<string, string>;
+  /** Platform used for `os` filters; apply re-evaluates with the same one. */
+  platform?: string;
 }
 
 export type StepStatus = "done" | "unchanged" | "skipped" | "failed" | "planned";

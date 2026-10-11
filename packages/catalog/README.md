@@ -41,7 +41,44 @@ Step types:
 |------|----------|
 | `file` | Copies `src` (relative to the module dir) to `dest` (relative to the Claude dir). `"mode": "symlink"` links to the catalog copy instead. |
 | `json-merge` | Deep-merges `src` into `dest`: objects merge, arrays are unioned without duplicates, existing keys are kept; a value that differs from the user's is a conflict the user decides (`--resolve`/`--on-conflict`, or a TUI prompt). A `dest` that is a symlink to a real file (e.g. a dotfiles repo) is merged through the link. |
-| `command` | Runs `run` as an argv (no shell). Skipped when `check` exits 0, or when `requiresBin` is not on `PATH`. |
+| `command` | Runs `run` as an argv (no shell), or `shell` as a bash script (`bash -o pipefail -c`, so `curl ... \| bash` fails when curl fails). Exactly one of `run`/`shell`. Skipped when `check` (argv) or `checkShell` (bash) exits 0, when `requiresBin` is not on `PATH`, when the OS is not in `os`, or when `globalOnly` is set and the target is not `~/.claude`. |
+
+`file` steps accept `"preserveBlocks": true` (copy mode): managed blocks that installers added to the destination (`<!-- BEGIN name -->`...`<!-- END name -->` or `<!-- name -->`...`<!-- /name -->`) are kept, appended after the copied content, so re-applying stays idempotent.
+
+`command` step options:
+
+| Field | Meaning |
+|-------|---------|
+| `os` | `["darwin", "linux", "win32"]` subset; other systems skip the step with a reason. |
+| `env` | Extra environment variables. Values expand `${CCC_SECRET_*}`, `${CCC_CLAUDE_DIR}` (the target Claude dir), `${CCC_CLAUDE_JSON}` (its `.claude.json`), `~/`, `$HOME` and `${NAME:-default}` (from the caller's environment). |
+| `interactive` | Stdin is `/dev/null` by default so installers never prompt; `true` lets the step use the terminal when `ccc` runs in a terminal (TUI or interactive `apply`). |
+| `globalOnly` | The tool always writes to `~/.claude` (it has no option for another dir): skip unless the target is `~/.claude`. |
+
+Every command also gets `CCC_CLAUDE_DIR` and `CCC_CLAUDE_JSON` in its environment. `$CCC_PLATFORM` overrides the detected OS (for tests).
+
+## Provides
+
+A module that installs things through an external installer declares what it owns, so `ccc capture` does not copy those items into personal modules:
+
+```json
+"provides": {
+  "paths": ["skills/commit", "hooks/commit-guard.sh"],
+  "settings": ["/includeCoAuthoredBy"],
+  "hooks": ["hooks/commit-guard.sh"],
+  "claudeMdBlocks": ["claude-commit-skill"],
+  "mcpServers": ["kaneo"]
+}
+```
+
+| Key | Matches |
+|-----|---------|
+| `paths` | Globs relative to the Claude dir (`*`, `**`, `?`); a match covers everything below it. |
+| `settings` | JSON pointers in `settings.json` (removed from the captured settings). |
+| `hooks` | Substrings of `settings.json` hook commands (those hook entries are removed). |
+| `claudeMdBlocks` | Managed CLAUDE.md block names, globs allowed (`gentle-ai:*`); the blocks are stripped from the captured CLAUDE.md. |
+| `mcpServers` | User-scope MCP server names in `.claude.json`. |
+
+Capture also never takes `skills/synced` or `skills/homelab-service-manager` (`CAPTURE_IGNORE` in core). Modules whose id starts with `personal-` never hide anything.
 
 Rules:
 

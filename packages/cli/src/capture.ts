@@ -20,7 +20,10 @@ import {
   type CaptureWriteResult,
   type Catalog,
   captureClaudeConfig,
+  collectProvided,
   defaultClaudeJson,
+  loadCatalog,
+  type ProvidedIndex,
   type Redaction,
   requiredSecrets,
   type Selection,
@@ -154,6 +157,26 @@ function renderCapture(capture: CaptureResult, written: CaptureWriteResult, c: C
   return lines.join("\n");
 }
 
+/**
+ * What the catalog's non-personal modules provide, so capture leaves it out: the catalog in
+ * `outDir` when it is a valid catalog, else the catalog in use (nothing when neither loads).
+ */
+function providedBy(ctx: Context, outDir?: string): ProvidedIndex {
+  if (outDir && existsSync(join(outDir, "modules"))) {
+    try {
+      return collectProvided(loadCatalog(outDir));
+    } catch {
+      // not a valid catalog: fall back to the one in use
+    }
+  }
+  try {
+    return collectProvided(ctx.catalog());
+  } catch {
+    // no usable catalog: nothing is provided, everything is captured
+    return collectProvided({ dir: "", modules: [], profiles: [] });
+  }
+}
+
 /** `ccc capture`: imports the current Claude config into catalog modules. */
 export async function captureCommand(ctx: Context, flags: CaptureFlags): Promise<number> {
   const include = parseKinds(flags.include);
@@ -175,7 +198,8 @@ export async function captureCommand(ctx: Context, flags: CaptureFlags): Promise
       "refusing to write captured modules without confirmation in non-interactive mode; pass --yes (or --dry-run to preview)",
     );
   }
-  const capture = captureClaudeConfig({ claudeDir: ctx.claudeDir, claudeJson, include });
+  const provided = providedBy(ctx, outDir);
+  const capture = captureClaudeConfig({ claudeDir: ctx.claudeDir, claudeJson, include, provided });
   const written = writeCapture(capture, { outDir, dryRun: flags.dryRun });
   if (ctx.options.json) writeJson(captureDoc(capture, written));
   else process.stdout.write(`${renderCapture(capture, written, ctx.colors)}\n`);
@@ -193,6 +217,7 @@ async function captureTui(
     claudeDir: ctx.claudeDir,
     claudeJson: options.claudeJson,
     include: options.include,
+    provided: providedBy(ctx, options.out ? resolve(options.out) : undefined),
   });
   if (capture.items.length === 0) {
     outro("Nothing to capture.");

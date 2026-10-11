@@ -3,11 +3,22 @@ import { join, resolve } from "node:path";
 import { CatalogError } from "./errors";
 import { isPlainObject } from "./merge";
 import { resolveInside } from "./paths";
+import { PROVIDES_KINDS } from "./provides";
 import { SECRET_NAME } from "./secrets";
-import type { Catalog, CatalogModule, ModuleSecret, Profile, Selection, Step } from "./types";
+import {
+  type Catalog,
+  type CatalogModule,
+  type ModuleProvides,
+  type ModuleSecret,
+  type Profile,
+  type Selection,
+  STEP_OS,
+  type Step,
+} from "./types";
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const VIRTUAL_CLAUDE_DIR = "/__claude_dir__";
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function readJson(file: string, code: "invalid_module" | "invalid_profile"): unknown {
   try {
@@ -47,6 +58,10 @@ function validateStep(raw: unknown, moduleDir: string, where: string): Step {
       if (raw.mode !== undefined && raw.mode !== "copy" && raw.mode !== "symlink") {
         fail(`mode must be "copy" or "symlink"`);
       }
+      if (raw.preserveBlocks !== undefined && typeof raw.preserveBlocks !== "boolean") {
+        fail("preserveBlocks must be a boolean");
+      }
+      if (raw.preserveBlocks && raw.mode === "symlink") fail("preserveBlocks needs copy mode");
       return raw as unknown as Step;
     case "json-merge":
       checkPaths(raw.src, raw.dest);
@@ -57,18 +72,76 @@ function validateStep(raw: unknown, moduleDir: string, where: string): Step {
         fail(`src "${raw.src}" is not valid JSON: ${(error as Error).message}`);
       }
       return raw as unknown as Step;
-    case "command":
-      if (!isStringArray(raw.run) || raw.run.length === 0) fail("run must be a non-empty argv");
+    case "command": {
+      const hasRun = raw.run !== undefined;
+      const hasShell = raw.shell !== undefined;
+      if (hasRun === hasShell) fail("set exactly one of run or shell");
+      if (hasRun && (!isStringArray(raw.run) || raw.run.length === 0)) {
+        fail("run must be a non-empty argv");
+      }
+      if (hasShell && (typeof raw.shell !== "string" || raw.shell.trim() === "")) {
+        fail("shell must be a non-empty string");
+      }
+      if (raw.check !== undefined && raw.checkShell !== undefined) {
+        fail("set at most one of check or checkShell");
+      }
       if (raw.check !== undefined && (!isStringArray(raw.check) || raw.check.length === 0)) {
         fail("check must be a non-empty argv");
+      }
+      if (
+        raw.checkShell !== undefined &&
+        (typeof raw.checkShell !== "string" || raw.checkShell.trim() === "")
+      ) {
+        fail("checkShell must be a non-empty string");
       }
       if (raw.requiresBin !== undefined && typeof raw.requiresBin !== "string") {
         fail("requiresBin must be a string");
       }
+      if (
+        raw.os !== undefined &&
+        (!isStringArray(raw.os) ||
+          raw.os.length === 0 ||
+          !raw.os.every((os) => (STEP_OS as readonly string[]).includes(os)))
+      ) {
+        fail(`os must be a non-empty list of ${STEP_OS.join(", ")}`);
+      }
+      if (
+        raw.env !== undefined &&
+        (!isPlainObject(raw.env) ||
+          !Object.entries(raw.env).every(
+            ([key, value]) => ENV_NAME.test(key) && typeof value === "string",
+          ))
+      ) {
+        fail("env must map variable names to strings");
+      }
+      for (const key of ["interactive", "globalOnly"] as const) {
+        if (raw[key] !== undefined && typeof raw[key] !== "boolean")
+          fail(`${key} must be a boolean`);
+      }
       return raw as unknown as Step;
+    }
     default:
       return fail(`unknown step type ${JSON.stringify(raw.type)}`);
   }
+}
+
+function validateProvides(raw: unknown, fail: (message: string) => never): ModuleProvides {
+  if (!isPlainObject(raw)) return fail("provides must be an object");
+  for (const [key, value] of Object.entries(raw)) {
+    if (!(PROVIDES_KINDS as readonly string[]).includes(key)) {
+      fail(`provides.${key} is not one of ${PROVIDES_KINDS.join(", ")}`);
+    }
+    if (!isStringArray(value)) fail(`provides.${key} must be a list of strings`);
+  }
+  for (const path of (raw.paths as string[] | undefined) ?? []) {
+    if (path.startsWith("/") || path.split("/").includes("..")) {
+      fail(`provides.paths "${path}" must be relative to the Claude dir`);
+    }
+  }
+  for (const pointer of (raw.settings as string[] | undefined) ?? []) {
+    if (!pointer.startsWith("/")) fail(`provides.settings "${pointer}" must be a JSON pointer`);
+  }
+  return raw as ModuleProvides;
 }
 
 function loadModule(dir: string, dirName: string): CatalogModule {
@@ -98,6 +171,7 @@ function loadModule(dir: string, dirName: string): CatalogModule {
       );
     if (!ok) fail("secrets must be [{ name: CCC_SECRET_*, description }]");
   }
+  const provides = raw.provides === undefined ? undefined : validateProvides(raw.provides, fail);
   if (!Array.isArray(raw.steps)) fail("steps must be an array");
   const steps = (raw.steps as unknown[]).map((step, index) =>
     validateStep(step, dir, `module "${dirName}" step ${index + 1}`),
@@ -109,6 +183,7 @@ function loadModule(dir: string, dirName: string): CatalogModule {
     tags: raw.tags as string[] | undefined,
     requires: raw.requires as string[] | undefined,
     ...(raw.secrets ? { secrets: raw.secrets as unknown as ModuleSecret[] } : {}),
+    ...(provides ? { provides } : {}),
     steps,
     dir,
   };
