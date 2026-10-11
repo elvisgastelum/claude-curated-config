@@ -50,6 +50,7 @@ Strategy: `single-pr` (user decision 2026-10-11). Create public repo elvisgastel
 | T15 | User decisions + review 5 fixes: inputs/secrets only for steps that will run (check first; R3-001), drop `skill-configure-env` from `personal` until published, capture drops homelab settings items (`CAPTURE_IGNORE_SETTINGS_ITEMS`, reason `homelab`), skip real-jq tests without jq (R3-002), `.local` hosts only in a host context (R3-003) | delegated | [x] | 63dd012, adc5ee7, 590a510, 90483f4, ce80994 |
 | T16 | Capture config file (`packages/catalog/capture.config.json`: ignoreSettings pointers, ignoreSettingsItems, privateDomains); drop settings strings with machine-local absolute paths (reported as skipped); ignore `/skipDangerousModePermissionPrompt`; review 6 fixes: collect inputs/secrets for steps skipped only because their bin is not installed yet, flag bare `*.local` hosts in structured JSON values | delegated | [x] | 72270d9, bd935e1, cf832d1, 66abb5a |
 | T13 | Re-run real capture dry-run, show the user, write leftover personal modules (settings + personal CLAUDE.md sections) only after approval | parent | [x] | see evidence |
+| T17 | T16 review advisory follow-ups: prune hook matcher/event/`hooks` entries left without commands in capture; module `providesBins` (set on tool-gentle-ai/engram/codegraph/herdr) so a missing-bin skip defers inputs/secrets only when this or an earlier module in the plan installs the bin; docs describe machine-local matching accurately (literal `$HOME` not matched) | delegated (writer trigger: 2+ non-trivial files) | [x] | 2cea75a, a78f9ef, 64cc5a4 |
 
 Route evidence: empty repo, 5 tasks across many non-trivial files → one bounded writer (mandatory writer trigger).
 
@@ -186,5 +187,11 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 - Real capture (user approved write + commit): created `personal-claude-md` (Standing review consent section) and `personal-settings` (defaultMode auto, enabled plugins, agentPushNotifEnabled, autoMode environment without the machine-local trusted-repo line); `personal` profile updated. Skipped by capture config: `skipDangerousModePermissionPrompt`, `Bash(homelabctl:*)`; machine-local: 1 autoMode line. 0 redactions, 0 privacy hits; grep for home paths / private domain / danger flag in the written files: clean.
 - `pnpm test` 143/143; `plan --profile personal` on a temp dir with KANEO_URL set: create 3, run 4, unchanged 6, skip 4.
 
+## T17 evidence (2026-10-11)
+- RED observed first: 2 new capture tests (half `{ matcher }` entry left; `hooks` object not removed) and 3 new engine tests (no provider / later-only provider still deferred; `providesBins` validation) failed before the fix, then passed.
+- Fresh-machine KANEO_URL CLI test kept passing with `providesBins: ["jq"]` on its `tool-jq` fixture; new CLI negative test: nothing installs jq -> apply exits 0, no `inputs_missing`. Catalog test asserts the four tool modules declare `providesBins`.
+- Deviation: bins of the current module count too (a tool module's later steps may need its own bin); only modules after it in the plan do not.
+- `pnpm install` ok, `pnpm build` ok, `pnpm typecheck` ok, `pnpm test` 150/150, `pnpm lint` fails only on the pre-existing formatting of the captured `personal-claude-md`/`personal-settings` module.json (tags arrays; not touched, content rule); private-host grep over the branch diff: 0.
+
 ## Next step
-Push to PR #1. Remaining advisory follow-ups listed above are optional.
+Push to PR #1. Open item: decide whether capture should write module.json in Biome format (or Biome should ignore captured `personal-*` modules) so `pnpm lint` passes.
