@@ -745,6 +745,45 @@ describe("module inputs", () => {
     expect(neededValues(planned)).toEqual(["SERVICE_URL", "CCC_INPUT_HOST"]);
   });
 
+  it("needs the values of a step skipped for a missing bin, since apply re-evaluates it", () => {
+    const catalog = loadCatalog(
+      writeCatalog([
+        {
+          id: "needs-tool",
+          inputs: [{ name: "SERVICE_URL", description: "url" }],
+          steps: [
+            {
+              type: "command",
+              shell: `echo "$SERVICE_URL"`,
+              env: { SERVICE_URL: `\${SERVICE_URL}` },
+              requiresBin: ["ccc-test-missing-tool"],
+            },
+          ],
+        },
+      ]),
+    );
+    const env = { PATH: "/usr/bin:/bin" };
+    const claudeDir = tempDir();
+    const planned = plan({ catalog, claudeDir, modules: ["needs-tool"], env });
+    const step = planned.modules[0]?.steps[0];
+    expect(step).toMatchObject({
+      action: "skip",
+      reason: '"ccc-test-missing-tool" not found on PATH',
+    });
+    expect(step?.blocked).toBeUndefined();
+    expect(neededValues(planned)).toEqual(["SERVICE_URL"]);
+    // With the value, nothing more is needed; status still counts the step as skipped.
+    const withValue = plan({
+      catalog,
+      claudeDir,
+      modules: ["needs-tool"],
+      env,
+      secrets: { SERVICE_URL: "https://svc.example.test" },
+    });
+    expect(neededValues(withValue)).toEqual([]);
+    expect(status({ catalog, claudeDir, env }).modules[0]).toMatchObject({ skipped: 1 });
+  });
+
   it("substitutes CCC_INPUT_* placeholders like secrets", () => {
     const claudeDir = tempDir();
     const catalog = loadCatalog(

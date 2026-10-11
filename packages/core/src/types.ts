@@ -165,6 +165,11 @@ export interface PlannedStep {
   needsSecret?: string;
   /** Every secret or input the blocked step references without a value. */
   needsValues?: string[];
+  /**
+   * Values without a value of a step skipped only because a `requiresBin` is missing: an
+   * earlier module may install it and apply re-evaluates the step, so they are asked up front.
+   */
+  deferredValues?: string[];
   step: Step;
 }
 

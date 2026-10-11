@@ -55,6 +55,8 @@ interface Evaluation {
   needsSecret?: string;
   /** Every secret or input the blocked step references without a value. */
   needsValues?: string[];
+  /** Values without a value of a step skipped for a missing bin (it may run at apply). */
+  deferredValues?: string[];
   /** json-merge: every difference from the current file is an undecided conflict. */
   onlyConflicts?: boolean;
   destPath?: string;
@@ -436,7 +438,15 @@ function evaluateCommand(
   }
   const missingBin = [step.requiresBin ?? []].flat().find((bin) => !which(bin, env));
   if (missingBin) {
-    return { action: "skip", reason: `"${missingBin}" not found on PATH`, summary };
+    // An earlier module may install the bin, and apply re-evaluates the step: its values are
+    // collected up front so it does not fail for a missing value then.
+    const deferred = referencedValues(step, mod).filter((name) => secrets[name] === undefined);
+    return {
+      action: "skip",
+      reason: `"${missingBin}" not found on PATH`,
+      summary,
+      ...(deferred.length > 0 ? { deferredValues: deferred } : {}),
+    };
   }
   // The check runs first: a step it reports as done needs none of its secrets or inputs.
   const checkArgv = step.checkShell
@@ -530,6 +540,7 @@ function planModule(
       if (evaluation.blocked) planned.blocked = true;
       if (evaluation.needsSecret) planned.needsSecret = evaluation.needsSecret;
       if (evaluation.needsValues) planned.needsValues = evaluation.needsValues;
+      if (evaluation.deferredValues) planned.deferredValues = evaluation.deferredValues;
       return planned;
     }),
   };
@@ -599,12 +610,15 @@ export function requiredSecrets(
 /**
  * Secrets and inputs the plan's steps need but have no value, deduplicated in plan order.
  * Steps whose check passes, or that are skipped for another reason, need none: only these
- * values have to be asked for before applying.
+ * values have to be asked for before applying. A step skipped only because a `requiresBin` is
+ * missing counts too: an earlier module may install the bin, and apply re-evaluates the step.
  */
 export function neededValues(planned: Plan): string[] {
   return [
     ...new Set(
-      planned.modules.flatMap((mod) => mod.steps.flatMap((step) => step.needsValues ?? [])),
+      planned.modules.flatMap((mod) =>
+        mod.steps.flatMap((step) => [...(step.needsValues ?? []), ...(step.deferredValues ?? [])]),
+      ),
     ),
   ];
 }

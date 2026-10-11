@@ -92,7 +92,7 @@ Rules:
 - Check JSON state with `jq` on the exact key (`jq -e '.mcpServers.<name> != null' "$CCC_CLAUDE_JSON"`), never with a `grep` of the whole file, and list `jq` in `requiresBin` (a string or a list; every binary must be on `PATH`).
 - Under `pipefail`, `tool | grep -q` can fail with SIGPIPE when grep exits early: capture the output first (`out=$(tool) && grep -q x <<<"$out"`).
 - Permission rules for paths should use `**/` globs (`Read(**/.env)`) so they match at any depth; `./` only matches the project root.
-- Give every `command` step a `check` or `checkShell` so re-running is idempotent, and a `requiresBin` so a missing prerequisite skips the step instead of failing it.
+- Give every `command` step a `check` or `checkShell` so re-running is idempotent, and a `requiresBin` so a missing prerequisite skips the step instead of failing it. A step skipped at plan time for a missing bin is evaluated again during apply (an earlier module may install the bin), so its inputs and secrets are asked for up front.
 - Prefer the upstream installer of a tool over a snapshot of its files, and declare what it writes under `provides`.
 - Tool installs (`tool-*`) set `"os": ["darwin", "linux"]`; a setup module `requires` its tool so it runs after the install.
 - `requires` lists modules that must be applied first; cycles are rejected.

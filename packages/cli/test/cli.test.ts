@@ -735,6 +735,63 @@ describe("personal profile with fake installers", () => {
     },
   );
 
+  it.skipIf(existsSync("/bin/jq"))(
+    "collects inputs up front for steps waiting on a tool an earlier module installs",
+    () => {
+      const home = temp();
+      const bin = join(home, "bin");
+      const log = join(home, "calls.log");
+      const catalog = join(home, "catalog");
+      mkdirSync(bin);
+      const module = (id: string, doc: Record<string, unknown>) => {
+        mkdirSync(join(catalog, "modules", id), { recursive: true });
+        writeFileSync(
+          join(catalog, "modules", id, "module.json"),
+          JSON.stringify({ id, name: id, description: `Fixture ${id}`, ...doc }),
+        );
+      };
+      mkdirSync(join(catalog, "profiles"), { recursive: true });
+      // A fresh machine: jq is not on the PATH until tool-jq installs it.
+      module("tool-jq", {
+        steps: [
+          {
+            type: "command",
+            shell: `printf '#!/bin/sh\\necho jq "$@" >> ${log}\\n' > ${bin}/jq && chmod +x ${bin}/jq`,
+            check: ["sh", "-c", "command -v jq"],
+          },
+        ],
+      });
+      module("skill-kaneo", {
+        requires: ["tool-jq"],
+        inputs: [{ name: "KANEO_URL", description: "Base URL of your Kaneo instance" }],
+        steps: [
+          {
+            type: "command",
+            shell: `jq --version && echo "kaneo $KANEO_URL" >> ${log}`,
+            env: { KANEO_URL: `\${KANEO_URL}` },
+            requiresBin: ["jq"],
+          },
+        ],
+      });
+      const env = { HOME: home, PATH: `${bin}:/bin` };
+      const args = ["--cli", "--catalog", catalog, "--claude-dir", join(home, ".claude"), "--json"];
+      const apply = [...args, "apply", "-m", "skill-kaneo", "--yes"];
+
+      const missing = ccc(apply, env);
+      expect(missing.code).toBe(2);
+      const error = missing.json().error as { code: string; inputs: { name: string }[] };
+      expect(error.code).toBe("inputs_missing");
+      expect(error.inputs.map((i) => i.name)).toEqual(["KANEO_URL"]);
+      expect(existsSync(join(bin, "jq"))).toBe(false);
+      expect(existsSync(log)).toBe(false);
+
+      const ok = ccc(apply, { ...env, KANEO_URL: "https://kaneo.example.test" });
+      expect(ok.stderr).toBe("");
+      expect(ok.code).toBe(0);
+      expect(readFileSync(log, "utf8")).toBe("jq --version\nkaneo https://kaneo.example.test\n");
+    },
+  );
+
   it("skips tool installs on an unsupported OS and ~/.claude-only setups for another dir", () => {
     const home = temp();
     const { bin } = fakeToolbox(home);
