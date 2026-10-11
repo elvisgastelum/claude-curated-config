@@ -9,7 +9,9 @@ import {
   blockProvider,
   emptyProvided,
   hookProvider,
+  itemMatches,
   mcpProvider,
+  type ProvidedEntry,
   type ProvidedIndex,
   pathProvider,
   settingProvider,
@@ -124,10 +126,7 @@ export interface CaptureOptions {
 
 /** Removes the value at a JSON pointer (object keys only); returns whether it existed. */
 function removePointer(doc: Json, pointer: string): boolean {
-  const keys = pointer
-    .split("/")
-    .slice(1)
-    .map((key) => key.replaceAll("~1", "/").replaceAll("~0", "~"));
+  const keys = pointerKeys(pointer);
   let node: Json = doc;
   for (const key of keys.slice(0, -1)) {
     if (!isPlainObject(node) || !(key in node)) return false;
@@ -137,6 +136,47 @@ function removePointer(doc: Json, pointer: string): boolean {
   if (last === undefined || !isPlainObject(node) || !(last in node)) return false;
   delete node[last];
   return true;
+}
+
+function pointerKeys(pointer: string): string[] {
+  return pointer
+    .split("/")
+    .slice(1)
+    .map((key) => key.replaceAll("~1", "/").replaceAll("~0", "~"));
+}
+
+/**
+ * Drops the string items of the array at `entry.value` that the entry covers. An array left
+ * empty is removed, and so are the objects that removal leaves empty.
+ */
+function removeItems(doc: Json, entry: ProvidedEntry, report: (item: string) => void): void {
+  const keys = pointerKeys(entry.value);
+  const chain: Record<string, Json>[] = [];
+  let node: Json = doc;
+  for (const key of keys.slice(0, -1)) {
+    if (!isPlainObject(node) || !isPlainObject(node[key])) return;
+    chain.push(node);
+    node = node[key] as Json;
+  }
+  const last = keys.at(-1);
+  if (last === undefined || !isPlainObject(node) || !Array.isArray(node[last])) return;
+  const kept = (node[last] as Json[]).filter((item) => {
+    const drop = typeof item === "string" && itemMatches(entry, item);
+    if (drop) report(item);
+    return !drop;
+  });
+  if (kept.length > 0) {
+    node[last] = kept;
+    return;
+  }
+  delete node[last];
+  // Remove parents emptied by the removal, innermost first.
+  for (let depth = chain.length - 1; depth >= 0; depth -= 1) {
+    const parent = chain[depth] as Record<string, Json>;
+    const key = keys[depth] as string;
+    if (isPlainObject(parent[key]) && Object.keys(parent[key]).length === 0) delete parent[key];
+    else break;
+  }
 }
 
 /** Default `.claude.json`: `~/.claude.json` for `~/.claude`, else `<claudeDir>/.claude.json`. */
@@ -604,8 +644,15 @@ function withoutProvided(
   provided: ProvidedIndex,
   report: (path: string, reason: string) => void,
 ): Record<string, Json> {
-  for (const { value, module } of provided.settings) {
-    if (removePointer(doc, value)) report(`settings.json ${value}`, `provided by ${module}`);
+  for (const entry of provided.settings) {
+    const { value, module } = entry;
+    if (entry.items || entry.match) {
+      removeItems(doc, entry, (item) =>
+        report(`settings.json ${value} ${item}`, `provided by ${module}`),
+      );
+    } else if (removePointer(doc, value)) {
+      report(`settings.json ${value}`, `provided by ${module}`);
+    }
   }
   const hooks = doc.hooks;
   if (!isPlainObject(hooks)) return doc;

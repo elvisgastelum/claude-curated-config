@@ -68,11 +68,24 @@ export interface ModuleSecret {
  * What a module owns in the Claude config. `ccc capture` leaves these out, so captured
  * personal modules never duplicate what an installer module sets up.
  */
+/**
+ * Items of a settings.json array that a module adds (e.g. permission rules): capture drops
+ * only those items from the array, never the whole key. At least one of `items` and `match`.
+ */
+export interface ProvidedSettingItems {
+  /** JSON pointer of the array, e.g. `/permissions/allow`. */
+  pointer: string;
+  /** Exact item values. */
+  items?: string[];
+  /** Wildcard patterns where `*` matches any characters, e.g. `mcp__codegraph__*`. */
+  match?: string[];
+}
+
 export interface ModuleProvides {
   /** Globs relative to the Claude dir (`*`, `**`, `?`); a match also covers everything below it. */
   paths?: string[];
-  /** JSON pointers in settings.json. */
-  settings?: string[];
+  /** JSON pointers in settings.json (the whole value), or array items under a pointer. */
+  settings?: (string | ProvidedSettingItems)[];
   /** Substrings of settings.json hook commands. */
   hooks?: string[];
   /** Managed CLAUDE.md block names (globs allowed, e.g. `gentle-ai:*`). */

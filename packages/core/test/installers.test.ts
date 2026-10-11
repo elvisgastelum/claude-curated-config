@@ -77,6 +77,28 @@ describe("command step validation", () => {
     });
     expect(catalog.modules[0]?.provides?.mcpServers).toEqual(["kaneo"]);
   });
+
+  it("validates array-item settings provides", () => {
+    const withSettings = (settings: unknown) =>
+      loadCatalog(writeCatalog([{ id: "m", steps: [], provides: { settings } as never }]));
+    expect(() => withSettings([{ pointer: "/permissions/allow" }])).toThrow(/items or match/);
+    expect(() => withSettings([{ pointer: "nope", items: ["x"] }])).toThrow(/JSON pointer/);
+    expect(() => withSettings([{ pointer: "/a", items: "x" }])).toThrow(/items/);
+    expect(() => withSettings([{ pointer: "/a", match: [1] }])).toThrow(/match/);
+    expect(() => withSettings([{ pointer: "/a", items: ["x"], extra: 1 }])).toThrow(/extra/);
+    const catalog = withSettings([
+      "/theme",
+      { pointer: "/permissions/allow", match: ["mcp__codegraph__*"] },
+      { pointer: "/permissions/deny", items: ["Read(.env)"] },
+    ]);
+    expect(catalog.modules[0]?.provides?.settings).toHaveLength(3);
+    const provided = collectProvided(catalog);
+    expect(provided.settings[1]).toEqual({
+      value: "/permissions/allow",
+      module: "m",
+      match: ["mcp__codegraph__*"],
+    });
+  });
 });
 
 describe("command step os filter", () => {
@@ -410,6 +432,65 @@ describe("provides-aware capture", () => {
     const md = result.items.find((i) => i.id === "personal-claude-md");
     expect(md?.files[0]?.content.toString()).toBe("# Personal\nmine\n");
     expect(md?.steps[0]).toMatchObject({ type: "file", dest: "CLAUDE.md", preserveBlocks: true });
+  });
+
+  it("drops provided array items from captured settings and keeps the rest", () => {
+    const root = tempDir("ccc-items-");
+    const claudeDir = join(root, "claude");
+    put(
+      claudeDir,
+      "settings.json",
+      JSON.stringify({
+        permissions: {
+          allow: ["mcp__codegraph__*", "mcp__codegraph__codegraph_explore", "Bash(ls:*)"],
+          deny: ["Read(.env)", "Read(.ssh/*)", "Read(.ssh/id_mine)"],
+          defaultMode: "auto",
+        },
+        env: { ONLY: ["mcp__codegraph__x"] },
+      }),
+    );
+    const catalog = loadCatalog(
+      writeCatalog([
+        {
+          id: "codegraph",
+          steps: [],
+          provides: {
+            settings: [{ pointer: "/permissions/allow", match: ["mcp__codegraph__*"] }] as never,
+          },
+        },
+        {
+          id: "gentle",
+          steps: [],
+          provides: {
+            settings: [
+              { pointer: "/permissions/deny", items: ["Read(.env)", "Read(.ssh/*)"] },
+              { pointer: "/env/ONLY", match: ["mcp__*"] },
+            ] as never,
+          },
+        },
+      ]),
+    );
+    const result = captureClaudeConfig({
+      claudeDir,
+      claudeJson: join(root, "none.json"),
+      provided: collectProvided(catalog),
+    });
+    const settings = JSON.parse(
+      result.items.find((i) => i.id === "personal-settings")?.files[0]?.content.toString() ?? "{}",
+    );
+    // `items` match exactly (Read(.ssh/id_mine) stays); `match` is a wildcard pattern.
+    expect(settings).toEqual({
+      permissions: { allow: ["Bash(ls:*)"], deny: ["Read(.ssh/id_mine)"], defaultMode: "auto" },
+    });
+    const reasons = result.skipped.map((s) => `${s.path} => ${s.reason}`);
+    expect(reasons).toEqual(
+      expect.arrayContaining([
+        "settings.json /permissions/allow mcp__codegraph__* => provided by codegraph",
+        "settings.json /permissions/allow mcp__codegraph__codegraph_explore => provided by codegraph",
+        "settings.json /permissions/deny Read(.env) => provided by gentle",
+        "settings.json /env/ONLY mcp__codegraph__x => provided by gentle",
+      ]),
+    );
   });
 
   it("captures everything except the ignore list without provides", () => {

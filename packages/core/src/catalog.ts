@@ -131,6 +131,7 @@ function validateProvides(raw: unknown, fail: (message: string) => never): Modul
     if (!(PROVIDES_KINDS as readonly string[]).includes(key)) {
       fail(`provides.${key} is not one of ${PROVIDES_KINDS.join(", ")}`);
     }
+    if (key === "settings") continue;
     if (!isStringArray(value)) fail(`provides.${key} must be a list of strings`);
   }
   for (const path of (raw.paths as string[] | undefined) ?? []) {
@@ -138,10 +139,37 @@ function validateProvides(raw: unknown, fail: (message: string) => never): Modul
       fail(`provides.paths "${path}" must be relative to the Claude dir`);
     }
   }
-  for (const pointer of (raw.settings as string[] | undefined) ?? []) {
-    if (!pointer.startsWith("/")) fail(`provides.settings "${pointer}" must be a JSON pointer`);
+  if (raw.settings !== undefined) {
+    if (!Array.isArray(raw.settings)) fail("provides.settings must be a list");
+    for (const entry of raw.settings as unknown[]) validateProvidedSetting(entry, fail);
   }
   return raw as ModuleProvides;
+}
+
+/** A settings pointer (string) or `{ pointer, items?, match? }` for array items. */
+function validateProvidedSetting(entry: unknown, fail: (message: string) => never): void {
+  const pointerOk = (pointer: unknown) => typeof pointer === "string" && pointer.startsWith("/");
+  if (typeof entry === "string") {
+    if (!pointerOk(entry)) fail(`provides.settings "${entry}" must be a JSON pointer`);
+    return;
+  }
+  if (!isPlainObject(entry)) {
+    fail("provides.settings entries must be JSON pointers or { pointer, items?, match? }");
+    return;
+  }
+  const label = `provides.settings ${JSON.stringify(entry.pointer)}`;
+  if (!pointerOk(entry.pointer)) fail(`${label}: pointer must be a JSON pointer`);
+  for (const key of Object.keys(entry)) {
+    if (!["pointer", "items", "match"].includes(key)) fail(`${label}: unknown field "${key}"`);
+  }
+  for (const key of ["items", "match"] as const) {
+    if (entry[key] !== undefined && (!isStringArray(entry[key]) || entry[key].length === 0)) {
+      fail(`${label}: ${key} must be a non-empty list of strings`);
+    }
+  }
+  if (entry.items === undefined && entry.match === undefined) {
+    fail(`${label}: needs items or match`);
+  }
 }
 
 function loadModule(dir: string, dirName: string): CatalogModule {

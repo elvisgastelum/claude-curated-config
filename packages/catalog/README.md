@@ -63,7 +63,11 @@ A module that installs things through an external installer declares what it own
 ```json
 "provides": {
   "paths": ["skills/commit", "hooks/commit-guard.sh"],
-  "settings": ["/includeCoAuthoredBy"],
+  "settings": [
+    "/includeCoAuthoredBy",
+    { "pointer": "/permissions/allow", "match": ["mcp__codegraph__*"] },
+    { "pointer": "/permissions/deny", "items": ["Read(.env)"] }
+  ],
   "hooks": ["hooks/commit-guard.sh"],
   "claudeMdBlocks": ["claude-commit-skill"],
   "mcpServers": ["kaneo"]
@@ -73,7 +77,7 @@ A module that installs things through an external installer declares what it own
 | Key | Matches |
 |-----|---------|
 | `paths` | Globs relative to the Claude dir (`*`, `**`, `?`); a match covers everything below it. |
-| `settings` | JSON pointers in `settings.json` (removed from the captured settings). |
+| `settings` | JSON pointers in `settings.json` (removed from the captured settings), or `{ "pointer", "items", "match" }` for array items an installer adds (permission rules): only those items are dropped from the captured array, by exact value (`items`) or wildcard pattern (`match`, `*` matches anything). An array left empty is removed, with the objects it leaves empty. |
 | `hooks` | Substrings of `settings.json` hook commands (those hook entries are removed). |
 | `claudeMdBlocks` | Managed CLAUDE.md block names, globs allowed (`gentle-ai:*`); the blocks are stripped from the captured CLAUDE.md. |
 | `mcpServers` | User-scope MCP server names in `.claude.json`. |
