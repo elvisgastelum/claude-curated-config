@@ -1,0 +1,7 @@
+{
+  "id": "full",
+  "name": "Full",
+  "description": "Everything in the catalog: settings, instructions, skills and MCP servers.",
+  "order": 20,
+  "modules": ["core-settings", "global-instructions", "mcp-context7", "skill-commit"]
+}

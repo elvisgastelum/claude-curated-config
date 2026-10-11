@@ -1,0 +1,7 @@
+{
+  "id": "global-instructions",
+  "name": "Global instructions",
+  "description": "Installs a starter ~/.claude/CLAUDE.md with personal rules (edit it to taste).",
+  "tags": ["instructions"],
+  "steps": [{ "type": "file", "src": "CLAUDE.md", "dest": "CLAUDE.md" }]
+}

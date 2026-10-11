@@ -1,0 +1,32 @@
+{
+  "name": "@claude-curated/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ccc: configure Claude Code from the curated catalog (TUI for humans, --cli/--json for agents).",
+  "type": "module",
+  "bin": {
+    "ccc": "./dist/index.js",
+    "claude-curated": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@claude-curated/catalog": "workspace:*",
+    "@clack/prompts": "1.8.1",
+    "commander": "14.0.3",
+    "picocolors": "1.1.1"
+  },
+  "devDependencies": {
+    "@claude-curated/core": "workspace:*"
+  }
+}

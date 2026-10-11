@@ -1,0 +1,28 @@
+{
+  "name": "claude-curated-config",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Configure Claude Code on any machine from a curated catalog.",
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@12.9.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r run build",
+    "test": "pnpm build && vitest run",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "pnpm -r run typecheck",
+    "dev": "pnpm --filter @claude-curated/cli dev",
+    "ccc": "node packages/cli/dist/index.js"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "22.20.5",
+    "tsup": "8.5.1",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  }
+}
