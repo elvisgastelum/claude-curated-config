@@ -98,5 +98,9 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 - Not done: TTY smoke of the new TUI out-dir prompt (typecheck only); shellcheck unavailable.
 - Deviation: markdown keeps strict-name redaction (`password:` lines) instead of value-shape-only, so secret coverage in prose does not regress.
 
+## Review 3 (T10, base 58181e6)
+- Parent spot check: `pnpm test` → 81/81. Native review high → standing consent, four lenses, **approved**, acknowledged (lineage review-a0e1319ecfe8e68a). Two whole-branch START attempts from the stop hook ended `lens_context_budget_exceeded` (no authority created); the branch is covered by the three slice reviews.
+- Advisory follow-ups: markdown key-name redaction narrower than before (`auth:`, `cookie:`, `session:`, `database_url:` lines in .md not redacted); `*Key`/`key` suffix false positives (hotKey, sortKey); dry-run without secrets hides conflicts; install.sh vs doctor node-floor fallbacks differ; misleading markdown test name; TUI out-dir unguarded.
+
 ## Next step
-PR #1 open (https://github.com/elvisgastelum/claude-curated-config/pull/1). User decisions 2026-10-11: fix review 2 gaps on PR #1 (T10); do NOT remember keep decisions between runs; installed `ccc capture` requires `--out`; then run `ccc capture --dry-run` on the real ~/.claude and show items + redactions before writing anything.
+Push T10 to PR #1. Run `ccc capture --dry-run` on the real ~/.claude and show items + redactions; manually check markdown items for unredacted `auth`/`cookie`/`session`/URL credentials before any write.
