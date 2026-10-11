@@ -77,5 +77,13 @@ Route evidence: empty repo, 5 tasks across many non-trivial files → one bounde
 - R2: backup docstring says "moved" vs copied; duplicated min-node constant and pending-count logic.
 - Product: explicit profile order (minimal first in TUI); decide json-merge conflict rule (catalog wins vs keep user value); `ccc capture` to import the current `~/.claude` into the catalog.
 
+## Review 2 (T6–T9, base 7bbfb7e)
+- Parent spot check: `pnpm test` → 63/63. Native review risk high → standing consent, four lenses, **approved**, acknowledged (lineage review-690cdbf172f3070f, authority burned). No blocking findings.
+- Advisory follow-ups (do before running `ccc capture` on the real config into this public repo):
+  - R1: secret detection misses `*_KEY` names (e.g. `OPENAI_KEY`), `DATABASE_URL`, long hex tokens; MCP secrets can end up in argv.
+  - R4/R3: `status` ignores provided secrets and `keep` resolutions (misreports modules); capture walk follows symlinks unbounded and is not error-tolerant; `Dirent.parentPath` needs Node >= 20.12 (raise `engines.node` or avoid it).
+  - R2: personal profile action misreported on empty capture; duplicated apply flow / truncate helpers; dry-run requires secrets.
+- Pre-push history scan: no real credentials (only regex sources, docs and fake fixtures).
+
 ## Next step
-Parent reviews T6-T9 (commits 4c8d3d4, f0a63fe, e8a257a, 5de5a65), then creates the public repo, pushes, and opens a single PR.
+Create public repo elvisgastelum/claude-curated-config, push `main` + branch, open the single PR. Then fix the review 2 follow-ups before capturing the real config.
